@@ -1,0 +1,15 @@
+# Rust build output
+/target/
+
+# Local media libraries and benchmark output
+/Music Folder/
+/Music Folder Test/
+/Music Folder Test 64kbps/
+/Music Folder Test ffmpeg/
+
+# macOS
+.DS_Store
+
+# Environment and temp files
+.env
+*.log

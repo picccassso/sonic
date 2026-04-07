@@ -1,7 +1,7 @@
 use std::ffi::{c_char, CString};
 
 use crate::{
-    audio::{preset::QualityPreset, transcoder::Transcoder},
+    audio::{output::OutputFormat, preset::QualityPreset, transcoder::Transcoder},
     errors::TranscodeError,
 };
 
@@ -19,12 +19,16 @@ pub const SONIC_STATUS_ENCODE_ERROR: i32 = 4;
 pub const SONIC_STATUS_NOT_IMPLEMENTED: i32 = 5;
 /// FFI status: quality preset value is invalid.
 pub const SONIC_STATUS_INVALID_PRESET: i32 = 6;
+/// FFI status: output format value is invalid.
+pub const SONIC_STATUS_INVALID_OUTPUT_FORMAT: i32 = 8;
 /// FFI status: internal failure.
 pub const SONIC_STATUS_INTERNAL_ERROR: i32 = 7;
 
 /// Quality presets accepted by `sonic_transcode_mp3_to_aac`.
 pub const SONIC_PRESET_LOW: u32 = 0;
 pub const SONIC_PRESET_MEDIUM: u32 = 1;
+pub const SONIC_OUTPUT_AAC: u32 = 0;
+pub const SONIC_OUTPUT_MP3: u32 = 1;
 
 /// Transcode MP3 bytes to AAC bytes with a quality preset.
 ///
@@ -40,6 +44,38 @@ pub unsafe extern "C" fn sonic_transcode_mp3_to_aac(
     input_ptr: *const u8,
     input_len: usize,
     preset: u32,
+    out_data_ptr: *mut *mut u8,
+    out_data_len: *mut usize,
+    out_data_cap: *mut usize,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    sonic_transcode_to_format(
+        input_ptr,
+        input_len,
+        preset,
+        SONIC_OUTPUT_AAC,
+        out_data_ptr,
+        out_data_len,
+        out_data_cap,
+        out_error,
+    )
+}
+
+/// Transcode MP3/WAV/FLAC bytes to AAC or MP3 bytes.
+///
+/// Presets:
+/// - SONIC_PRESET_LOW
+/// - SONIC_PRESET_MEDIUM
+///
+/// Output formats:
+/// - SONIC_OUTPUT_AAC
+/// - SONIC_OUTPUT_MP3
+#[no_mangle]
+pub unsafe extern "C" fn sonic_transcode_to_format(
+    input_ptr: *const u8,
+    input_len: usize,
+    preset: u32,
+    output_format: u32,
     out_data_ptr: *mut *mut u8,
     out_data_len: *mut usize,
     out_data_cap: *mut usize,
@@ -81,8 +117,21 @@ pub unsafe extern "C" fn sonic_transcode_mp3_to_aac(
         }
     };
 
+    let output_format = match parse_output_format(output_format) {
+        Some(v) => v,
+        None => {
+            write_error(
+                out_error,
+                format!(
+                    "invalid output format value {output_format}; expected SONIC_OUTPUT_AAC ({SONIC_OUTPUT_AAC}) or SONIC_OUTPUT_MP3 ({SONIC_OUTPUT_MP3})"
+                ),
+            );
+            return SONIC_STATUS_INVALID_OUTPUT_FORMAT;
+        }
+    };
+
     let transcoder = Transcoder::new(QualityPreset::Medium.bitrate_kbps());
-    match transcoder.transcode_with_preset(input, quality) {
+    match transcoder.transcode_with_preset_and_format(input, quality, output_format) {
         Ok(mut bytes) => {
             let ptr = bytes.as_mut_ptr();
             let len = bytes.len();
@@ -133,6 +182,14 @@ fn parse_preset(preset: u32) -> Option<QualityPreset> {
     }
 }
 
+fn parse_output_format(output_format: u32) -> Option<OutputFormat> {
+    match output_format {
+        SONIC_OUTPUT_AAC => Some(OutputFormat::Aac),
+        SONIC_OUTPUT_MP3 => Some(OutputFormat::Mp3),
+        _ => None,
+    }
+}
+
 fn write_error(out_error: *mut *mut c_char, message: String) {
     if out_error.is_null() {
         return;
@@ -153,6 +210,7 @@ fn map_error_to_status(err: &TranscodeError) -> i32 {
         TranscodeError::EmptyBody => SONIC_STATUS_INVALID_ARGS,
         TranscodeError::UnsupportedFormat => SONIC_STATUS_UNSUPPORTED_FORMAT,
         TranscodeError::InvalidPreset(_) => SONIC_STATUS_INVALID_PRESET,
+        TranscodeError::InvalidOutputFormat(_) => SONIC_STATUS_INVALID_OUTPUT_FORMAT,
         TranscodeError::Decode(_) => SONIC_STATUS_DECODE_ERROR,
         TranscodeError::Encode(_) => SONIC_STATUS_ENCODE_ERROR,
         TranscodeError::NotImplemented(_) => SONIC_STATUS_NOT_IMPLEMENTED,

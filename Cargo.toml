@@ -8,15 +8,12 @@ name = "sonic_transcoder"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-actix-web = "4.11"
-env_logger = "0.11"
-log = "0.4"
 thiserror = "2"
-serde = { version = "1", features = ["derive"] }
 id3 = "1.16"
 minimp3 = "0.6"
-num_cpus = "1.17"
-walkdir = "2.5"
+hound = "3.5"
+claxon = "0.4"
+mp3lame-encoder = "0.2"
 
 # Keep FDK optional at scaffold stage; enable with --features aac-fdk
 fdk-aac = { version = "0.8", optional = true }

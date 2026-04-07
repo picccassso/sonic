@@ -17,10 +17,13 @@ extern "C" {
 #define SONIC_STATUS_NOT_IMPLEMENTED 5
 #define SONIC_STATUS_INVALID_PRESET 6
 #define SONIC_STATUS_INTERNAL_ERROR 7
+#define SONIC_STATUS_INVALID_OUTPUT_FORMAT 8
 
 // Presets for sonic_transcode_mp3_to_aac
 #define SONIC_PRESET_LOW 0
 #define SONIC_PRESET_MEDIUM 1
+#define SONIC_OUTPUT_AAC 0
+#define SONIC_OUTPUT_MP3 1
 
 // Transcodes MP3 bytes to AAC bytes.
 //
@@ -36,6 +39,18 @@ int32_t sonic_transcode_mp3_to_aac(
     const uint8_t* input_ptr,
     size_t input_len,
     uint32_t preset,
+    uint8_t** out_data_ptr,
+    size_t* out_data_len,
+    size_t* out_data_cap,
+    char** out_error
+);
+
+// Generic transcode API supporting MP3/WAV/FLAC input and AAC/MP3 output.
+int32_t sonic_transcode_to_format(
+    const uint8_t* input_ptr,
+    size_t input_len,
+    uint32_t preset,
+    uint32_t output_format,
     uint8_t** out_data_ptr,
     size_t* out_data_len,
     size_t* out_data_cap,

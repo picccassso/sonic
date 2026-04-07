@@ -57,6 +57,14 @@ int32_t sonic_transcode_to_format(
     char** out_error
 );
 
+// Transcodes an MP3 file path to an AAC file path.
+int32_t sonic_transcode_mp3_file_to_aac_file(
+    const char* input_path,
+    uint32_t preset,
+    const char* output_path,
+    char** out_error
+);
+
 void sonic_free_buffer(uint8_t* ptr, size_t len, size_t cap);
 void sonic_free_c_string(char* ptr);
 uint32_t sonic_ffi_abi_version(void);

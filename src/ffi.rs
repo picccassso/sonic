@@ -1,4 +1,7 @@
-use std::ffi::{c_char, CString};
+use std::{
+    ffi::{c_char, CStr, CString},
+    fs,
+};
 
 use crate::{
     audio::{output::OutputFormat, preset::QualityPreset, transcoder::Transcoder},
@@ -146,6 +149,102 @@ pub unsafe extern "C" fn sonic_transcode_to_format(
         Err(err) => {
             write_error(out_error, err.to_string());
             map_error_to_status(&err)
+        }
+    }
+}
+
+/// Transcode an MP3 file to an AAC file with a quality preset.
+///
+/// - `input_path` and `output_path` must be valid UTF-8 C strings.
+/// - On error, `out_error` may contain an allocated C string; release via
+///   `sonic_free_c_string`.
+///
+/// Returns one of SONIC_STATUS_* constants.
+#[no_mangle]
+pub unsafe extern "C" fn sonic_transcode_mp3_file_to_aac_file(
+    input_path: *const c_char,
+    preset: u32,
+    output_path: *const c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if !out_error.is_null() {
+        *out_error = std::ptr::null_mut();
+    }
+
+    if input_path.is_null() || output_path.is_null() {
+        write_error(out_error, "input_path/output_path must not be null".to_string());
+        return SONIC_STATUS_INVALID_ARGS;
+    }
+
+    let input_path = match CStr::from_ptr(input_path).to_str() {
+        Ok(value) if !value.is_empty() => value,
+        Ok(_) => {
+            write_error(out_error, "input_path must not be empty".to_string());
+            return SONIC_STATUS_INVALID_ARGS;
+        }
+        Err(_) => {
+            write_error(out_error, "input_path is not valid UTF-8".to_string());
+            return SONIC_STATUS_INVALID_ARGS;
+        }
+    };
+
+    let output_path = match CStr::from_ptr(output_path).to_str() {
+        Ok(value) if !value.is_empty() => value,
+        Ok(_) => {
+            write_error(out_error, "output_path must not be empty".to_string());
+            return SONIC_STATUS_INVALID_ARGS;
+        }
+        Err(_) => {
+            write_error(out_error, "output_path is not valid UTF-8".to_string());
+            return SONIC_STATUS_INVALID_ARGS;
+        }
+    };
+
+    let quality = match parse_preset(preset) {
+        Some(v) => v,
+        None => {
+            write_error(
+                out_error,
+                format!(
+                    "invalid preset value {preset}; expected SONIC_PRESET_LOW ({SONIC_PRESET_LOW}) or SONIC_PRESET_MEDIUM ({SONIC_PRESET_MEDIUM})"
+                ),
+            );
+            return SONIC_STATUS_INVALID_PRESET;
+        }
+    };
+
+    let input = match fs::read(input_path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            write_error(
+                out_error,
+                format!("failed to read input file '{input_path}': {err}"),
+            );
+            return SONIC_STATUS_INVALID_ARGS;
+        }
+    };
+
+    let transcoder = Transcoder::new(QualityPreset::Medium.bitrate_kbps());
+    let output = match transcoder.transcode_with_preset_and_format(
+        &input,
+        quality,
+        OutputFormat::Aac,
+    ) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            write_error(out_error, err.to_string());
+            return map_error_to_status(&err);
+        }
+    };
+
+    match fs::write(output_path, output) {
+        Ok(()) => SONIC_STATUS_OK,
+        Err(err) => {
+            write_error(
+                out_error,
+                format!("failed to write output file '{output_path}': {err}"),
+            );
+            SONIC_STATUS_INTERNAL_ERROR
         }
     }
 }

@@ -44,3 +44,29 @@ FFmpeg comparison benchmark:
 ```bash
 ./scripts/bench_ffmpeg_folder.sh "Music Folder" "Music Folder Test ffmpeg" 10 128
 ```
+
+## Embedded (FFI, no HTTP)
+
+Sonic can be embedded directly (no HTTP server) through a C ABI.
+
+Build the shared library:
+
+```bash
+cargo build --release --features aac-fdk --lib
+```
+
+Generated library name by platform:
+
+- macOS: `target/release/libsonic_transcoder.dylib`
+- Linux: `target/release/libsonic_transcoder.so`
+- Windows: `target/release/sonic_transcoder.dll`
+
+C header:
+
+- `include/sonic_ffi.h`
+
+Main FFI entrypoint:
+
+- `sonic_transcode_mp3_to_aac(...)` with presets:
+  - `SONIC_PRESET_LOW` -> 64 kbps
+  - `SONIC_PRESET_MEDIUM` -> 128 kbps

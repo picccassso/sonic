@@ -3,6 +3,10 @@ name = "sonic-transcoder"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "sonic_transcoder"
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 actix-web = "4.11"
 env_logger = "0.11"

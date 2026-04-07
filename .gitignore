@@ -1,9 +1,13 @@
 # Rust build output
 /target/
+/target/bench_runs/
 
 # Local media libraries and benchmark output
 /Music Folder/
 /Music Folder Test*/
+
+# Local benchmark helpers
+/src/bin/bench_compare.rs
 
 # macOS
 .DS_Store

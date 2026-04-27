@@ -51,6 +51,20 @@ typedef struct SonicAudioInfo {
     uint32_t has_artwork;
 } SonicAudioInfo;
 
+typedef struct SonicBuffer {
+    uint8_t* ptr;
+    size_t len;
+    size_t cap;
+} SonicBuffer;
+
+typedef struct SonicTranscodeOptions {
+    uint32_t output_format;
+    uint32_t preset;
+    // Set to 0 to use preset. Set > 0 to override preset with an explicit bitrate.
+    uint32_t bitrate_kbps;
+    uint32_t reserved;
+} SonicTranscodeOptions;
+
 typedef struct SonicCapabilities {
     uint32_t abi_version;
     uint32_t input_formats;
@@ -103,6 +117,17 @@ int32_t sonic_transcode_to_format_with_bitrate(
     char** out_error
 );
 
+// Recommended options-based buffer API. If options is NULL, Sonic uses default options.
+int32_t sonic_transcode(
+    const uint8_t* input_ptr,
+    size_t input_len,
+    const SonicTranscodeOptions* options,
+    SonicBuffer* out_buffer,
+    char** out_error
+);
+
+SonicTranscodeOptions sonic_default_transcode_options(void);
+
 // Compatibility helper: transcodes an MP3 file path to an AAC file path.
 int32_t sonic_transcode_mp3_file_to_aac_file(
     const char* input_path,
@@ -129,6 +154,14 @@ int32_t sonic_transcode_file_to_format_with_bitrate(
     char** out_error
 );
 
+// Recommended options-based file API. If options is NULL, Sonic uses default options.
+int32_t sonic_transcode_file(
+    const char* input_path,
+    const SonicTranscodeOptions* options,
+    const char* output_path,
+    char** out_error
+);
+
 // Probes audio properties without transcoding.
 int32_t sonic_probe_audio(
     const uint8_t* input_ptr,
@@ -139,6 +172,7 @@ int32_t sonic_probe_audio(
 
 SonicCapabilities sonic_get_capabilities(void);
 void sonic_free_buffer(uint8_t* ptr, size_t len, size_t cap);
+void sonic_free_output_buffer(SonicBuffer* buffer);
 void sonic_free_c_string(char* ptr);
 uint32_t sonic_ffi_abi_version(void);
 

@@ -1,91 +1,37 @@
 use std::{
-    ffi::{c_char, CStr, CString},
+    ffi::{c_char, CString},
     fs,
 };
 
 use crate::{
-    audio::{
-        detect::InputFormat,
-        output::OutputFormat,
-        preset::QualityPreset,
-        probe::{self, AudioInfo},
-        transcoder::Transcoder,
+    audio::{probe, preset::QualityPreset, transcoder::Transcoder},
+    ffi::{
+        convert::{
+            aac_feature_capabilities, aac_output_capabilities, audio_info_to_ffi, parse_output_format,
+            parse_paths, parse_preset,
+        },
+        support::{
+            buffer_from_vec, drop_buffer, map_error_to_status, reset_buffer, write_error,
+        },
     },
-    errors::TranscodeError,
 };
 
-/// FFI status: success.
-pub const SONIC_STATUS_OK: i32 = 0;
-/// FFI status: one or more arguments were null/invalid.
-pub const SONIC_STATUS_INVALID_ARGS: i32 = 1;
-/// FFI status: unsupported input format.
-pub const SONIC_STATUS_UNSUPPORTED_FORMAT: i32 = 2;
-/// FFI status: decode failed.
-pub const SONIC_STATUS_DECODE_ERROR: i32 = 3;
-/// FFI status: encode failed.
-pub const SONIC_STATUS_ENCODE_ERROR: i32 = 4;
-/// FFI status: operation not implemented in current build.
-pub const SONIC_STATUS_NOT_IMPLEMENTED: i32 = 5;
-/// FFI status: quality preset value is invalid.
-pub const SONIC_STATUS_INVALID_PRESET: i32 = 6;
-/// FFI status: output format value is invalid.
-pub const SONIC_STATUS_INVALID_OUTPUT_FORMAT: i32 = 8;
-/// FFI status: internal failure.
-pub const SONIC_STATUS_INTERNAL_ERROR: i32 = 7;
+pub mod convert;
+pub mod support;
+pub mod types;
 
-/// Quality presets accepted by preset-based transcode APIs.
-pub const SONIC_PRESET_LOW: u32 = 0;
-pub const SONIC_PRESET_MEDIUM: u32 = 1;
-pub const SONIC_PRESET_HIGH: u32 = 2;
-pub const SONIC_PRESET_VERY_HIGH: u32 = 3;
-pub const SONIC_OUTPUT_AAC: u32 = 0;
-pub const SONIC_OUTPUT_MP3: u32 = 1;
-pub const SONIC_OUTPUT_M4A: u32 = 2;
-
-pub const SONIC_INPUT_MP3: u32 = 0;
-pub const SONIC_INPUT_WAV: u32 = 1;
-pub const SONIC_INPUT_FLAC: u32 = 2;
-
-pub const SONIC_CAP_INPUT_MP3: u32 = 1 << 0;
-pub const SONIC_CAP_INPUT_WAV: u32 = 1 << 1;
-pub const SONIC_CAP_INPUT_FLAC: u32 = 1 << 2;
-pub const SONIC_CAP_OUTPUT_AAC: u32 = 1 << 8;
-pub const SONIC_CAP_OUTPUT_MP3: u32 = 1 << 9;
-pub const SONIC_CAP_OUTPUT_M4A: u32 = 1 << 10;
-pub const SONIC_CAP_AAC_FDK: u32 = 1 << 16;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct SonicAudioInfo {
-    pub input_format: u32,
-    pub sample_rate: u32,
-    pub channels: u32,
-    pub bits_per_sample: u32,
-    pub duration_ms: u64,
-    pub total_samples_per_channel: u64,
-    pub has_metadata: u32,
-    pub has_artwork: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct SonicCapabilities {
-    pub abi_version: u32,
-    pub input_formats: u32,
-    pub output_formats: u32,
-    pub features: u32,
-    pub preset_count: u32,
-}
+pub use types::{
+    SonicAudioInfo, SonicBuffer, SonicCapabilities, SonicTranscodeOptions,
+    SONIC_CAP_AAC_FDK, SONIC_CAP_INPUT_FLAC, SONIC_CAP_INPUT_MP3, SONIC_CAP_INPUT_WAV,
+    SONIC_CAP_OUTPUT_AAC, SONIC_CAP_OUTPUT_M4A, SONIC_CAP_OUTPUT_MP3, SONIC_INPUT_FLAC,
+    SONIC_INPUT_MP3, SONIC_INPUT_WAV, SONIC_OUTPUT_AAC, SONIC_OUTPUT_M4A, SONIC_OUTPUT_MP3,
+    SONIC_PRESET_HIGH, SONIC_PRESET_LOW, SONIC_PRESET_MEDIUM, SONIC_PRESET_VERY_HIGH,
+    SONIC_STATUS_DECODE_ERROR, SONIC_STATUS_ENCODE_ERROR, SONIC_STATUS_INTERNAL_ERROR,
+    SONIC_STATUS_INVALID_ARGS, SONIC_STATUS_INVALID_OUTPUT_FORMAT, SONIC_STATUS_INVALID_PRESET,
+    SONIC_STATUS_NOT_IMPLEMENTED, SONIC_STATUS_OK, SONIC_STATUS_UNSUPPORTED_FORMAT,
+};
 
 /// Transcode MP3 bytes to AAC bytes with a quality preset.
-///
-/// Ownership model:
-/// - On success, output bytes are allocated by Sonic and returned via out params.
-/// - Caller must release output via `sonic_free_buffer`.
-/// - On error, `out_error` may contain an allocated C string; release via
-///   `sonic_free_c_string`.
-///
-/// Returns one of SONIC_STATUS_* constants.
 #[no_mangle]
 pub unsafe extern "C" fn sonic_transcode_mp3_to_aac(
     input_ptr: *const u8,
@@ -109,17 +55,6 @@ pub unsafe extern "C" fn sonic_transcode_mp3_to_aac(
 }
 
 /// Transcode MP3/WAV/FLAC bytes to AAC, M4A, or MP3 bytes.
-///
-/// Presets:
-/// - SONIC_PRESET_LOW
-/// - SONIC_PRESET_MEDIUM
-/// - SONIC_PRESET_HIGH
-/// - SONIC_PRESET_VERY_HIGH
-///
-/// Output formats:
-/// - SONIC_OUTPUT_AAC
-/// - SONIC_OUTPUT_M4A
-/// - SONIC_OUTPUT_MP3
 #[no_mangle]
 pub unsafe extern "C" fn sonic_transcode_to_format(
     input_ptr: *const u8,
@@ -131,16 +66,31 @@ pub unsafe extern "C" fn sonic_transcode_to_format(
     out_data_cap: *mut usize,
     out_error: *mut *mut c_char,
 ) -> i32 {
-    sonic_transcode_to_format_inner(
+    if out_data_ptr.is_null() || out_data_len.is_null() || out_data_cap.is_null() {
+        return SONIC_STATUS_INVALID_ARGS;
+    }
+
+    *out_data_ptr = std::ptr::null_mut();
+    *out_data_len = 0;
+    *out_data_cap = 0;
+
+    let mut buffer = SonicBuffer::empty();
+    let status = transcode_preset_to_buffer(
         input_ptr,
         input_len,
         preset,
         output_format,
-        out_data_ptr,
-        out_data_len,
-        out_data_cap,
+        &mut buffer,
         out_error,
-    )
+    );
+
+    if status == SONIC_STATUS_OK {
+        *out_data_ptr = buffer.ptr;
+        *out_data_len = buffer.len;
+        *out_data_cap = buffer.cap;
+    }
+
+    status
 }
 
 /// Transcode MP3/WAV/FLAC bytes to AAC, M4A, or MP3 bytes with an explicit bitrate.
@@ -155,173 +105,86 @@ pub unsafe extern "C" fn sonic_transcode_to_format_with_bitrate(
     out_data_cap: *mut usize,
     out_error: *mut *mut c_char,
 ) -> i32 {
-    sonic_transcode_to_format_with_bitrate_inner(
-        input_ptr,
-        input_len,
-        bitrate_kbps,
+    if out_data_ptr.is_null() || out_data_len.is_null() || out_data_cap.is_null() {
+        return SONIC_STATUS_INVALID_ARGS;
+    }
+
+    *out_data_ptr = std::ptr::null_mut();
+    *out_data_len = 0;
+    *out_data_cap = 0;
+
+    let options = SonicTranscodeOptions {
         output_format,
-        out_data_ptr,
-        out_data_len,
-        out_data_cap,
-        out_error,
-    )
+        preset: SONIC_PRESET_MEDIUM,
+        bitrate_kbps,
+        reserved: 0,
+    };
+    let mut buffer = SonicBuffer::empty();
+    let status = sonic_transcode(input_ptr, input_len, &options, &mut buffer, out_error);
+
+    if status == SONIC_STATUS_OK {
+        *out_data_ptr = buffer.ptr;
+        *out_data_len = buffer.len;
+        *out_data_cap = buffer.cap;
+    }
+
+    status
 }
 
-unsafe fn sonic_transcode_to_format_inner(
+/// Return default transcode options for the options-based API.
+#[no_mangle]
+pub extern "C" fn sonic_default_transcode_options() -> SonicTranscodeOptions {
+    SonicTranscodeOptions {
+        output_format: SONIC_OUTPUT_MP3,
+        preset: SONIC_PRESET_MEDIUM,
+        bitrate_kbps: 0,
+        reserved: 0,
+    }
+}
+
+/// Transcode bytes using a compact options struct and single output buffer.
+#[no_mangle]
+pub unsafe extern "C" fn sonic_transcode(
     input_ptr: *const u8,
     input_len: usize,
-    preset: u32,
-    output_format: u32,
-    out_data_ptr: *mut *mut u8,
-    out_data_len: *mut usize,
-    out_data_cap: *mut usize,
+    options: *const SonicTranscodeOptions,
+    out_buffer: *mut SonicBuffer,
     out_error: *mut *mut c_char,
 ) -> i32 {
-    if out_data_ptr.is_null() || out_data_len.is_null() || out_data_cap.is_null() {
+    if out_buffer.is_null() {
         return SONIC_STATUS_INVALID_ARGS;
     }
 
-    // Initialize outputs to a known state.
-    *out_data_ptr = std::ptr::null_mut();
-    *out_data_len = 0;
-    *out_data_cap = 0;
+    reset_buffer(out_buffer);
 
-    if !out_error.is_null() {
-        *out_error = std::ptr::null_mut();
-    }
+    let options = if options.is_null() {
+        sonic_default_transcode_options()
+    } else {
+        *options
+    };
 
-    if input_ptr.is_null() && input_len > 0 {
-        write_error(
+    if options.bitrate_kbps > 0 {
+        transcode_bitrate_to_buffer(
+            input_ptr,
+            input_len,
+            options.bitrate_kbps,
+            options.output_format,
+            out_buffer,
             out_error,
-            "input_ptr is null while input_len is non-zero".to_string(),
-        );
-        return SONIC_STATUS_INVALID_ARGS;
-    }
-
-    let input = std::slice::from_raw_parts(input_ptr, input_len);
-
-    let quality = match parse_preset(preset) {
-        Some(v) => v,
-        None => {
-            write_error(
-                out_error,
-                format!(
-                    "invalid preset value {preset}; expected SONIC_PRESET_LOW ({SONIC_PRESET_LOW}), SONIC_PRESET_MEDIUM ({SONIC_PRESET_MEDIUM}), SONIC_PRESET_HIGH ({SONIC_PRESET_HIGH}), or SONIC_PRESET_VERY_HIGH ({SONIC_PRESET_VERY_HIGH})"
-                ),
-            );
-            return SONIC_STATUS_INVALID_PRESET;
-        }
-    };
-
-    let output_format = match parse_output_format(output_format) {
-        Some(v) => v,
-        None => {
-            write_error(
-                out_error,
-                format!(
-                    "invalid output format value {output_format}; expected SONIC_OUTPUT_AAC ({SONIC_OUTPUT_AAC}), SONIC_OUTPUT_MP3 ({SONIC_OUTPUT_MP3}), or SONIC_OUTPUT_M4A ({SONIC_OUTPUT_M4A})"
-                ),
-            );
-            return SONIC_STATUS_INVALID_OUTPUT_FORMAT;
-        }
-    };
-
-    let transcoder = Transcoder::new(QualityPreset::Medium.bitrate_kbps());
-    match transcoder.transcode_with_preset_and_format(input, quality, output_format) {
-        Ok(mut bytes) => {
-            let ptr = bytes.as_mut_ptr();
-            let len = bytes.len();
-            let cap = bytes.capacity();
-            std::mem::forget(bytes);
-
-            *out_data_ptr = ptr;
-            *out_data_len = len;
-            *out_data_cap = cap;
-            SONIC_STATUS_OK
-        }
-        Err(err) => {
-            write_error(out_error, err.to_string());
-            map_error_to_status(&err)
-        }
+        )
+    } else {
+        transcode_preset_to_buffer(
+            input_ptr,
+            input_len,
+            options.preset,
+            options.output_format,
+            out_buffer,
+            out_error,
+        )
     }
 }
 
-unsafe fn sonic_transcode_to_format_with_bitrate_inner(
-    input_ptr: *const u8,
-    input_len: usize,
-    bitrate_kbps: u32,
-    output_format: u32,
-    out_data_ptr: *mut *mut u8,
-    out_data_len: *mut usize,
-    out_data_cap: *mut usize,
-    out_error: *mut *mut c_char,
-) -> i32 {
-    if out_data_ptr.is_null() || out_data_len.is_null() || out_data_cap.is_null() {
-        return SONIC_STATUS_INVALID_ARGS;
-    }
-
-    *out_data_ptr = std::ptr::null_mut();
-    *out_data_len = 0;
-    *out_data_cap = 0;
-
-    if !out_error.is_null() {
-        *out_error = std::ptr::null_mut();
-    }
-
-    if input_ptr.is_null() && input_len > 0 {
-        write_error(
-            out_error,
-            "input_ptr is null while input_len is non-zero".to_string(),
-        );
-        return SONIC_STATUS_INVALID_ARGS;
-    }
-
-    if bitrate_kbps == 0 {
-        write_error(out_error, "bitrate_kbps must be > 0".to_string());
-        return SONIC_STATUS_INVALID_ARGS;
-    }
-
-    let output_format = match parse_output_format(output_format) {
-        Some(v) => v,
-        None => {
-            write_error(
-                out_error,
-                format!(
-                    "invalid output format value {output_format}; expected SONIC_OUTPUT_AAC ({SONIC_OUTPUT_AAC}), SONIC_OUTPUT_MP3 ({SONIC_OUTPUT_MP3}), or SONIC_OUTPUT_M4A ({SONIC_OUTPUT_M4A})"
-                ),
-            );
-            return SONIC_STATUS_INVALID_OUTPUT_FORMAT;
-        }
-    };
-
-    let input = std::slice::from_raw_parts(input_ptr, input_len);
-    let transcoder = Transcoder::new(QualityPreset::Medium.bitrate_kbps());
-    match transcoder.transcode_with_bitrate_and_format(input, bitrate_kbps, output_format) {
-        Ok(mut bytes) => {
-            let ptr = bytes.as_mut_ptr();
-            let len = bytes.len();
-            let cap = bytes.capacity();
-            std::mem::forget(bytes);
-
-            *out_data_ptr = ptr;
-            *out_data_len = len;
-            *out_data_cap = cap;
-            SONIC_STATUS_OK
-        }
-        Err(err) => {
-            write_error(out_error, err.to_string());
-            map_error_to_status(&err)
-        }
-    }
-}
-
-/// Transcode an MP3 file to an AAC file with a quality preset.
-///
-/// - `input_path` and `output_path` must be valid UTF-8 C strings.
-/// - On error, `out_error` may contain an allocated C string; release via
-///   `sonic_free_c_string`.
-///
-/// Returns one of SONIC_STATUS_* constants.
+/// Compatibility helper: transcodes an MP3 file path to an AAC file path.
 #[no_mangle]
 pub unsafe extern "C" fn sonic_transcode_mp3_file_to_aac_file(
     input_path: *const c_char,
@@ -347,99 +210,13 @@ pub unsafe extern "C" fn sonic_transcode_file_to_format(
     output_path: *const c_char,
     out_error: *mut *mut c_char,
 ) -> i32 {
-    if !out_error.is_null() {
-        *out_error = std::ptr::null_mut();
-    }
-
-    if input_path.is_null() || output_path.is_null() {
-        write_error(out_error, "input_path/output_path must not be null".to_string());
-        return SONIC_STATUS_INVALID_ARGS;
-    }
-
-    let input_path = match CStr::from_ptr(input_path).to_str() {
-        Ok(value) if !value.is_empty() => value,
-        Ok(_) => {
-            write_error(out_error, "input_path must not be empty".to_string());
-            return SONIC_STATUS_INVALID_ARGS;
-        }
-        Err(_) => {
-            write_error(out_error, "input_path is not valid UTF-8".to_string());
-            return SONIC_STATUS_INVALID_ARGS;
-        }
-    };
-
-    let output_path = match CStr::from_ptr(output_path).to_str() {
-        Ok(value) if !value.is_empty() => value,
-        Ok(_) => {
-            write_error(out_error, "output_path must not be empty".to_string());
-            return SONIC_STATUS_INVALID_ARGS;
-        }
-        Err(_) => {
-            write_error(out_error, "output_path is not valid UTF-8".to_string());
-            return SONIC_STATUS_INVALID_ARGS;
-        }
-    };
-
-    let quality = match parse_preset(preset) {
-        Some(v) => v,
-        None => {
-            write_error(
-                out_error,
-                format!(
-                    "invalid preset value {preset}; expected SONIC_PRESET_LOW ({SONIC_PRESET_LOW}), SONIC_PRESET_MEDIUM ({SONIC_PRESET_MEDIUM}), SONIC_PRESET_HIGH ({SONIC_PRESET_HIGH}), or SONIC_PRESET_VERY_HIGH ({SONIC_PRESET_VERY_HIGH})"
-                ),
-            );
-            return SONIC_STATUS_INVALID_PRESET;
-        }
-    };
-
-    let output_format = match parse_output_format(output_format) {
-        Some(v) => v,
-        None => {
-            write_error(
-                out_error,
-                format!(
-                    "invalid output format value {output_format}; expected SONIC_OUTPUT_AAC ({SONIC_OUTPUT_AAC}), SONIC_OUTPUT_MP3 ({SONIC_OUTPUT_MP3}), or SONIC_OUTPUT_M4A ({SONIC_OUTPUT_M4A})"
-                ),
-            );
-            return SONIC_STATUS_INVALID_OUTPUT_FORMAT;
-        }
-    };
-
-    let input = match fs::read(&input_path) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            write_error(
-                out_error,
-                format!("failed to read input file '{input_path}': {err}"),
-            );
-            return SONIC_STATUS_INVALID_ARGS;
-        }
-    };
-
-    let transcoder = Transcoder::new(QualityPreset::Medium.bitrate_kbps());
-    let output = match transcoder.transcode_with_preset_and_format(
-        &input,
-        quality,
+    let options = SonicTranscodeOptions {
         output_format,
-    ) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            write_error(out_error, err.to_string());
-            return map_error_to_status(&err);
-        }
+        preset,
+        bitrate_kbps: 0,
+        reserved: 0,
     };
-
-    match fs::write(&output_path, output) {
-        Ok(()) => SONIC_STATUS_OK,
-        Err(err) => {
-            write_error(
-                out_error,
-                format!("failed to write output file '{output_path}': {err}"),
-            );
-            SONIC_STATUS_INTERNAL_ERROR
-        }
-    }
+    sonic_transcode_file(input_path, &options, output_path, out_error)
 }
 
 /// Transcode an MP3/WAV/FLAC file to an AAC, M4A, or MP3 file with an explicit bitrate.
@@ -451,64 +228,61 @@ pub unsafe extern "C" fn sonic_transcode_file_to_format_with_bitrate(
     output_path: *const c_char,
     out_error: *mut *mut c_char,
 ) -> i32 {
+    let options = SonicTranscodeOptions {
+        output_format,
+        preset: SONIC_PRESET_MEDIUM,
+        bitrate_kbps,
+        reserved: 0,
+    };
+    sonic_transcode_file(input_path, &options, output_path, out_error)
+}
+
+/// Transcode a file using a compact options struct.
+#[no_mangle]
+pub unsafe extern "C" fn sonic_transcode_file(
+    input_path: *const c_char,
+    options: *const SonicTranscodeOptions,
+    output_path: *const c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
     if !out_error.is_null() {
         *out_error = std::ptr::null_mut();
     }
 
-    if bitrate_kbps == 0 {
-        write_error(out_error, "bitrate_kbps must be > 0".to_string());
-        return SONIC_STATUS_INVALID_ARGS;
-    }
-
-    let (input_path, output_path) = match parse_paths(input_path, output_path, out_error) {
-        Some(paths) => paths,
-        None => return SONIC_STATUS_INVALID_ARGS,
-    };
-
-    let output_format = match parse_output_format(output_format) {
-        Some(v) => v,
-        None => {
-            write_error(
-                out_error,
-                format!(
-                    "invalid output format value {output_format}; expected SONIC_OUTPUT_AAC ({SONIC_OUTPUT_AAC}), SONIC_OUTPUT_MP3 ({SONIC_OUTPUT_MP3}), or SONIC_OUTPUT_M4A ({SONIC_OUTPUT_M4A})"
-                ),
-            );
-            return SONIC_STATUS_INVALID_OUTPUT_FORMAT;
+    let (input_path, output_path) = match parse_paths(input_path, output_path) {
+        Ok(paths) => paths,
+        Err(message) => {
+            write_error(out_error, message);
+            return SONIC_STATUS_INVALID_ARGS;
         }
     };
 
     let input = match fs::read(&input_path) {
         Ok(bytes) => bytes,
         Err(err) => {
-            write_error(
-                out_error,
-                format!("failed to read input file '{input_path}': {err}"),
-            );
+            write_error(out_error, format!("failed to read input file '{input_path}': {err}"));
             return SONIC_STATUS_INVALID_ARGS;
         }
     };
 
-    let transcoder = Transcoder::new(QualityPreset::Medium.bitrate_kbps());
-    let output = match transcoder.transcode_with_bitrate_and_format(
-        &input,
-        bitrate_kbps,
-        output_format,
-    ) {
+    let options = if options.is_null() {
+        sonic_default_transcode_options()
+    } else {
+        *options
+    };
+
+    let output = match transcode_bytes(&input, options) {
         Ok(bytes) => bytes,
-        Err(err) => {
-            write_error(out_error, err.to_string());
-            return map_error_to_status(&err);
+        Err((status, message)) => {
+            write_error(out_error, message);
+            return status;
         }
     };
 
     match fs::write(&output_path, output) {
         Ok(()) => SONIC_STATUS_OK,
         Err(err) => {
-            write_error(
-                out_error,
-                format!("failed to write output file '{output_path}': {err}"),
-            );
+            write_error(out_error, format!("failed to write output file '{output_path}': {err}"));
             SONIC_STATUS_INTERNAL_ERROR
         }
     }
@@ -532,18 +306,16 @@ pub unsafe extern "C" fn sonic_probe_audio(
         *out_error = std::ptr::null_mut();
     }
 
-    if input_ptr.is_null() && input_len > 0 {
-        write_error(
-            out_error,
-            "input_ptr is null while input_len is non-zero".to_string(),
-        );
-        return SONIC_STATUS_INVALID_ARGS;
-    }
-
-    let input = std::slice::from_raw_parts(input_ptr, input_len);
+    let input = match input_slice(input_ptr, input_len) {
+        Ok(input) => input,
+        Err(message) => {
+            write_error(out_error, message);
+            return SONIC_STATUS_INVALID_ARGS;
+        }
+    };
     match probe::probe(input) {
         Ok(info) => {
-            *out_info = SonicAudioInfo::from_audio_info(info);
+            *out_info = audio_info_to_ffi(info);
             SONIC_STATUS_OK
         }
         Err(err) => {
@@ -565,16 +337,24 @@ pub extern "C" fn sonic_get_capabilities() -> SonicCapabilities {
     }
 }
 
-/// Release a buffer previously returned by `sonic_transcode_mp3_to_aac`.
+/// Release a buffer previously returned through the legacy pointer/len/cap API.
 #[no_mangle]
 pub unsafe extern "C" fn sonic_free_buffer(ptr: *mut u8, len: usize, cap: usize) {
-    if ptr.is_null() {
-        return;
-    }
-    drop(Vec::from_raw_parts(ptr, len, cap));
+    drop_buffer(SonicBuffer { ptr, len, cap });
 }
 
-/// Release an error string previously returned by `sonic_transcode_mp3_to_aac`.
+/// Release a buffer previously returned through `sonic_transcode`.
+#[no_mangle]
+pub unsafe extern "C" fn sonic_free_output_buffer(buffer: *mut SonicBuffer) {
+    if buffer.is_null() {
+        return;
+    }
+    let owned = *buffer;
+    *buffer = SonicBuffer::empty();
+    drop_buffer(owned);
+}
+
+/// Release an error string previously returned by Sonic.
 #[no_mangle]
 pub unsafe extern "C" fn sonic_free_c_string(ptr: *mut c_char) {
     if ptr.is_null() {
@@ -586,146 +366,120 @@ pub unsafe extern "C" fn sonic_free_c_string(ptr: *mut c_char) {
 /// Returns the ABI version of Sonic FFI.
 #[no_mangle]
 pub extern "C" fn sonic_ffi_abi_version() -> u32 {
-    2
+    3
 }
 
-fn parse_preset(preset: u32) -> Option<QualityPreset> {
-    match preset {
-        SONIC_PRESET_LOW => Some(QualityPreset::Low),
-        SONIC_PRESET_MEDIUM => Some(QualityPreset::Medium),
-        SONIC_PRESET_HIGH => Some(QualityPreset::High),
-        SONIC_PRESET_VERY_HIGH => Some(QualityPreset::VeryHigh),
-        _ => None,
-    }
-}
-
-fn parse_output_format(output_format: u32) -> Option<OutputFormat> {
-    match output_format {
-        SONIC_OUTPUT_AAC => Some(OutputFormat::Aac),
-        SONIC_OUTPUT_MP3 => Some(OutputFormat::Mp3),
-        SONIC_OUTPUT_M4A => Some(OutputFormat::M4a),
-        _ => None,
-    }
-}
-
-unsafe fn parse_paths(
-    input_path: *const c_char,
-    output_path: *const c_char,
+unsafe fn transcode_preset_to_buffer(
+    input_ptr: *const u8,
+    input_len: usize,
+    preset: u32,
+    output_format: u32,
+    out_buffer: *mut SonicBuffer,
     out_error: *mut *mut c_char,
-) -> Option<(String, String)> {
-    if input_path.is_null() || output_path.is_null() {
-        write_error(out_error, "input_path/output_path must not be null".to_string());
-        return None;
+) -> i32 {
+    let options = SonicTranscodeOptions {
+        output_format,
+        preset,
+        bitrate_kbps: 0,
+        reserved: 0,
+    };
+    transcode_options_to_buffer(input_ptr, input_len, options, out_buffer, out_error)
+}
+
+unsafe fn transcode_bitrate_to_buffer(
+    input_ptr: *const u8,
+    input_len: usize,
+    bitrate_kbps: u32,
+    output_format: u32,
+    out_buffer: *mut SonicBuffer,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let options = SonicTranscodeOptions {
+        output_format,
+        preset: SONIC_PRESET_MEDIUM,
+        bitrate_kbps,
+        reserved: 0,
+    };
+    transcode_options_to_buffer(input_ptr, input_len, options, out_buffer, out_error)
+}
+
+unsafe fn transcode_options_to_buffer(
+    input_ptr: *const u8,
+    input_len: usize,
+    options: SonicTranscodeOptions,
+    out_buffer: *mut SonicBuffer,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if !out_error.is_null() {
+        *out_error = std::ptr::null_mut();
     }
 
-    let input_path = match CStr::from_ptr(input_path).to_str() {
-        Ok(value) if !value.is_empty() => value,
-        Ok(_) => {
-            write_error(out_error, "input_path must not be empty".to_string());
-            return None;
+    let input = match input_slice(input_ptr, input_len) {
+        Ok(input) => input,
+        Err(message) => {
+            write_error(out_error, message);
+            return SONIC_STATUS_INVALID_ARGS;
         }
-        Err(_) => {
-            write_error(out_error, "input_path is not valid UTF-8".to_string());
-            return None;
+    };
+    let output = match transcode_bytes(input, options) {
+        Ok(bytes) => bytes,
+        Err((status, message)) => {
+            write_error(out_error, message);
+            return status;
         }
     };
 
-    let output_path = match CStr::from_ptr(output_path).to_str() {
-        Ok(value) if !value.is_empty() => value,
-        Ok(_) => {
-            write_error(out_error, "output_path must not be empty".to_string());
-            return None;
-        }
-        Err(_) => {
-            write_error(out_error, "output_path is not valid UTF-8".to_string());
-            return None;
-        }
+    *out_buffer = buffer_from_vec(output);
+    SONIC_STATUS_OK
+}
+
+fn transcode_bytes(input: &[u8], options: SonicTranscodeOptions) -> Result<Vec<u8>, (i32, String)> {
+    let output_format = parse_output_format(options.output_format).ok_or_else(|| {
+        (
+            SONIC_STATUS_INVALID_OUTPUT_FORMAT,
+            invalid_output_format_message(options.output_format),
+        )
+    })?;
+
+    let transcoder = Transcoder::new(QualityPreset::Medium.bitrate_kbps());
+
+    let result = if options.bitrate_kbps > 0 {
+        transcoder.transcode_with_bitrate_and_format(input, options.bitrate_kbps, output_format)
+    } else {
+        let quality = parse_preset(options.preset).ok_or_else(|| {
+            (
+                SONIC_STATUS_INVALID_PRESET,
+                invalid_preset_message(options.preset),
+            )
+        })?;
+        transcoder.transcode_with_preset_and_format(input, quality, output_format)
     };
 
-    Some((input_path.to_string(), output_path.to_string()))
+    result.map_err(|err| (map_error_to_status(&err), err.to_string()))
 }
 
-fn write_error(out_error: *mut *mut c_char, message: String) {
-    if out_error.is_null() {
-        return;
-    }
-
-    let sanitized = message.replace('\0', " ");
-    let c = CString::new(sanitized).unwrap_or_else(|_| {
-        CString::new("sonic error").expect("CString::new on static literal must succeed")
-    });
-    // SAFETY: caller provided out_error pointer validity is validated by FFI contract.
-    unsafe {
-        *out_error = c.into_raw();
-    }
+fn invalid_preset_message(preset: u32) -> String {
+    format!(
+        "invalid preset value {preset}; expected SONIC_PRESET_LOW ({SONIC_PRESET_LOW}), SONIC_PRESET_MEDIUM ({SONIC_PRESET_MEDIUM}), SONIC_PRESET_HIGH ({SONIC_PRESET_HIGH}), or SONIC_PRESET_VERY_HIGH ({SONIC_PRESET_VERY_HIGH})"
+    )
 }
 
-fn map_error_to_status(err: &TranscodeError) -> i32 {
-    match err {
-        TranscodeError::EmptyBody => SONIC_STATUS_INVALID_ARGS,
-        TranscodeError::UnsupportedFormat => SONIC_STATUS_UNSUPPORTED_FORMAT,
-        TranscodeError::InvalidPreset(_) => SONIC_STATUS_INVALID_PRESET,
-        TranscodeError::InvalidOutputFormat(_) => SONIC_STATUS_INVALID_OUTPUT_FORMAT,
-        TranscodeError::Decode(_) => SONIC_STATUS_DECODE_ERROR,
-        TranscodeError::Encode(_) => SONIC_STATUS_ENCODE_ERROR,
-        TranscodeError::NotImplemented(_) => SONIC_STATUS_NOT_IMPLEMENTED,
-    }
+fn invalid_output_format_message(output_format: u32) -> String {
+    format!(
+        "invalid output format value {output_format}; expected SONIC_OUTPUT_AAC ({SONIC_OUTPUT_AAC}), SONIC_OUTPUT_MP3 ({SONIC_OUTPUT_MP3}), or SONIC_OUTPUT_M4A ({SONIC_OUTPUT_M4A})"
+    )
 }
 
-impl SonicAudioInfo {
-    fn empty() -> Self {
-        Self {
-            input_format: 0,
-            sample_rate: 0,
-            channels: 0,
-            bits_per_sample: 0,
-            duration_ms: 0,
-            total_samples_per_channel: 0,
-            has_metadata: 0,
-            has_artwork: 0,
+unsafe fn input_slice<'a>(input_ptr: *const u8, input_len: usize) -> Result<&'a [u8], &'static str> {
+    if input_ptr.is_null() {
+        if input_len == 0 {
+            Ok(&[])
+        } else {
+            Err("input_ptr is null while input_len is non-zero")
         }
+    } else {
+        Ok(std::slice::from_raw_parts(input_ptr, input_len))
     }
-
-    fn from_audio_info(info: AudioInfo) -> Self {
-        Self {
-            input_format: input_format_code(info.input_format),
-            sample_rate: info.sample_rate,
-            channels: u32::from(info.channels),
-            bits_per_sample: u32::from(info.bits_per_sample),
-            duration_ms: info.duration_ms,
-            total_samples_per_channel: info.total_samples_per_channel,
-            has_metadata: u32::from(info.has_metadata),
-            has_artwork: u32::from(info.has_artwork),
-        }
-    }
-}
-
-fn input_format_code(input_format: InputFormat) -> u32 {
-    match input_format {
-        InputFormat::Mp3 => SONIC_INPUT_MP3,
-        InputFormat::Wav => SONIC_INPUT_WAV,
-        InputFormat::Flac => SONIC_INPUT_FLAC,
-    }
-}
-
-#[cfg(feature = "aac-fdk")]
-fn aac_output_capabilities() -> u32 {
-    SONIC_CAP_OUTPUT_AAC | SONIC_CAP_OUTPUT_M4A
-}
-
-#[cfg(not(feature = "aac-fdk"))]
-fn aac_output_capabilities() -> u32 {
-    0
-}
-
-#[cfg(feature = "aac-fdk")]
-fn aac_feature_capabilities() -> u32 {
-    SONIC_CAP_AAC_FDK
-}
-
-#[cfg(not(feature = "aac-fdk"))]
-fn aac_feature_capabilities() -> u32 {
-    0
 }
 
 #[cfg(test)]
@@ -736,12 +490,21 @@ mod tests {
     fn reports_build_capabilities() {
         let caps = sonic_get_capabilities();
 
-        assert_eq!(caps.abi_version, 2);
+        assert_eq!(caps.abi_version, 3);
         assert_ne!(caps.input_formats & SONIC_CAP_INPUT_MP3, 0);
         assert_ne!(caps.input_formats & SONIC_CAP_INPUT_WAV, 0);
         assert_ne!(caps.input_formats & SONIC_CAP_INPUT_FLAC, 0);
         assert_ne!(caps.output_formats & SONIC_CAP_OUTPUT_MP3, 0);
         assert_eq!(caps.preset_count, 4);
+    }
+
+    #[test]
+    fn default_options_are_stable_and_simple() {
+        let options = sonic_default_transcode_options();
+
+        assert_eq!(options.output_format, SONIC_OUTPUT_MP3);
+        assert_eq!(options.preset, SONIC_PRESET_MEDIUM);
+        assert_eq!(options.bitrate_kbps, 0);
     }
 
     #[test]
@@ -751,6 +514,6 @@ mod tests {
             parse_preset(SONIC_PRESET_VERY_HIGH),
             Some(QualityPreset::VeryHigh)
         );
-        assert_eq!(parse_output_format(SONIC_OUTPUT_M4A), Some(OutputFormat::M4a));
+        assert_eq!(parse_output_format(SONIC_OUTPUT_M4A), Some(crate::audio::output::OutputFormat::M4a));
     }
 }

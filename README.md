@@ -12,6 +12,7 @@ Sonic is a lightweight Rust audio transcoder for embedding directly into your ap
   - `HIGH` = `192 kbps`
   - `VERY_HIGH` = `320 kbps`
 - Custom bitrate APIs for callers that need an exact target bitrate
+- Options-based `SonicTranscodeOptions` and `SonicBuffer` APIs for easier host integration
 - Probe API for format, sample rate, channels, duration, bit depth, and metadata/artwork presence
 - Basic MP3 ID3 metadata/artwork preservation when writing MP3 or ADTS AAC
 - Capability reporting for the current build
@@ -37,8 +38,11 @@ cargo build --release --features aac-fdk --lib
 
 - `sonic_transcode_to_format(...)` (recommended)
 - `sonic_transcode_to_format_with_bitrate(...)`
+- `sonic_transcode(...)` (recommended options-based buffer API)
 - `sonic_transcode_file_to_format(...)`
 - `sonic_transcode_file_to_format_with_bitrate(...)`
+- `sonic_transcode_file(...)` (recommended options-based file API)
+- `sonic_default_transcode_options()`
 - `sonic_probe_audio(...)`
 - `sonic_get_capabilities()`
 - `sonic_transcode_mp3_to_aac(...)` (compat helper)
@@ -52,4 +56,25 @@ cargo build --release --features aac-fdk --lib
 - AAC encoding requires building with `--features aac-fdk`.
 - `M4A` output also requires `--features aac-fdk` because it wraps Sonic's AAC encoder output.
 - Buffers returned by Sonic must be freed with `sonic_free_buffer`.
+- `SonicBuffer` values returned by `sonic_transcode` must be freed with `sonic_free_output_buffer`.
 - Error strings returned by Sonic must be freed with `sonic_free_c_string`.
+
+## C Example
+
+```c
+SonicTranscodeOptions options = sonic_default_transcode_options();
+options.output_format = SONIC_OUTPUT_M4A;
+options.preset = SONIC_PRESET_HIGH;
+
+SonicBuffer output = {0};
+char* error = NULL;
+int32_t status = sonic_transcode(input_bytes, input_len, &options, &output, &error);
+
+if (status == SONIC_STATUS_OK) {
+    // use output.ptr/output.len
+    sonic_free_output_buffer(&output);
+} else {
+    // inspect error, then release it
+    sonic_free_c_string(error);
+}
+```

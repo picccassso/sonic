@@ -170,7 +170,7 @@ int32_t status = sonic_transcode_directory("Music Folder", "Output Folder", &bat
 
 ## Local Benchmark
 
-On one local Apple Silicon machine, Sonic was tested against FFmpeg 8.1 using:
+On an M2 Pro MacBook Pro, Sonic was tested against FFmpeg 8.1 using:
 
 - 565 local MP3 files
 - 10 workers

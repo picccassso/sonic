@@ -106,6 +106,26 @@ cc examples/c/transcode_directory.c \
 
 Windows builds should link against `sonic_transcoder.dll` using the normal native toolchain flow for the host app.
 
+## Build A Linux ARM64 Artifact With Docker
+
+Use this when you want a Linux ARM64 package, for example for Raspberry Pi 5:
+
+```bash
+VERSION=0.1.0 scripts/build-linux-arm64-docker.sh
+```
+
+The script runs the build inside a `linux/arm64` Docker container and writes:
+
+```text
+dist/sonic-transcoder-v0.1.0-linux-arm64.tar.gz
+```
+
+Set `BUILD_AAC=0` to build without AAC/M4A support:
+
+```bash
+BUILD_AAC=0 VERSION=0.1.0 scripts/build-linux-arm64-docker.sh
+```
+
 ## FFI Entry Points
 
 - `sonic_transcode_to_format(...)` (recommended)
@@ -189,4 +209,4 @@ if (status == SONIC_STATUS_OK) {
 
 ## License
 
-Sonic is licensed under the MIT License. See `LICENSE`.
+Sonic is licensed under the MIT License. See `LICENSE.md`.

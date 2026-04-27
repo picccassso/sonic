@@ -1,0 +1,83 @@
+name: Release Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without the leading v, for example 0.1.0"
+        required: true
+        default: "0.1.0"
+      build_aac:
+        description: "Build with AAC/M4A support"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  package:
+    name: Package ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            os: macos-latest
+            library: libsonic_transcoder.dylib
+            archive: tar.gz
+          - platform: linux-x64
+            os: ubuntu-latest
+            library: libsonic_transcoder.so
+            archive: tar.gz
+          - platform: windows-x64
+            os: windows-latest
+            library: sonic_transcoder.dll
+            archive: zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build shared library
+        shell: bash
+        run: |
+          if [ "${{ inputs.build_aac }}" = "true" ]; then
+            cargo build --release --features aac-fdk --lib
+          else
+            cargo build --release --lib
+          fi
+
+      - name: Package files
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          PACKAGE="sonic-transcoder-v${VERSION}-${{ matrix.platform }}"
+          DIST="dist/${PACKAGE}"
+
+          mkdir -p "${DIST}/include" "${DIST}/lib" "${DIST}/examples/c"
+
+          cp include/sonic_ffi.h "${DIST}/include/"
+          cp "target/release/${{ matrix.library }}" "${DIST}/lib/"
+          cp target/release/*.dll.lib "${DIST}/lib/" 2>/dev/null || true
+          cp target/release/*.lib "${DIST}/lib/" 2>/dev/null || true
+          cp examples/c/*.c "${DIST}/examples/c/"
+          cp README.md GUIDE.md LICENSE.md "${DIST}/"
+
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd dist && 7z a "${PACKAGE}.zip" "${PACKAGE}")
+          else
+            tar -czf "${DIST}.tar.gz" -C dist "${PACKAGE}"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sonic-transcoder-${{ inputs.version }}-${{ matrix.platform }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error

@@ -47,11 +47,18 @@ pub fn transcode_directory(
     options: BatchTranscodeOptions,
 ) -> Result<BatchTranscodeSummary, String> {
     if !input_dir.is_dir() {
-        return Err(format!("input_dir is not a directory: {}", input_dir.display()));
+        return Err(format!(
+            "input_dir is not a directory: {}",
+            input_dir.display()
+        ));
     }
 
-    fs::create_dir_all(output_dir)
-        .map_err(|err| format!("failed to create output_dir '{}': {err}", output_dir.display()))?;
+    fs::create_dir_all(output_dir).map_err(|err| {
+        format!(
+            "failed to create output_dir '{}': {err}",
+            output_dir.display()
+        )
+    })?;
 
     let jobs = collect_jobs(input_dir, output_dir, options.output_format)?;
     let files_total = jobs.len() as u64;
@@ -144,8 +151,7 @@ fn transcode_job(
     }
 
     let output = if let Some(bitrate_kbps) = options.bitrate_kbps {
-        transcoder
-            .transcode_with_bitrate_and_format(&input, bitrate_kbps, options.output_format)
+        transcoder.transcode_with_bitrate_and_format(&input, bitrate_kbps, options.output_format)
     } else {
         transcoder.transcode_with_preset_and_format(&input, options.preset, options.output_format)
     }
@@ -194,9 +200,12 @@ fn collect_jobs_inner(
             continue;
         }
 
-        let rel = path
-            .strip_prefix(root)
-            .map_err(|err| format!("failed to create relative path for '{}': {err}", path.display()))?;
+        let rel = path.strip_prefix(root).map_err(|err| {
+            format!(
+                "failed to create relative path for '{}': {err}",
+                path.display()
+            )
+        })?;
         let output_path = output_dir
             .join(rel)
             .with_extension(output_format.file_extension());

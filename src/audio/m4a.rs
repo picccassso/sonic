@@ -66,7 +66,9 @@ fn parse_adts(input: &[u8]) -> Result<AacConfig, TranscodeError> {
             | (((input[pos + 5] & 0xE0) as usize) >> 5);
 
         if frame_len < header_len || pos + frame_len > input.len() {
-            return Err(TranscodeError::Encode("invalid ADTS frame length".to_string()));
+            return Err(TranscodeError::Encode(
+                "invalid ADTS frame length".to_string(),
+            ));
         }
 
         audio_object_type.get_or_insert(profile + 1);
@@ -90,12 +92,16 @@ fn parse_adts(input: &[u8]) -> Result<AacConfig, TranscodeError> {
     }
 
     if pos != input.len() || frames.is_empty() {
-        return Err(TranscodeError::Encode("invalid or empty ADTS stream".to_string()));
+        return Err(TranscodeError::Encode(
+            "invalid or empty ADTS stream".to_string(),
+        ));
     }
 
     let sample_rate_index = sample_rate_index.unwrap_or_default();
     let sample_rate = sample_rate_from_index(sample_rate_index).ok_or_else(|| {
-        TranscodeError::Encode(format!("unsupported AAC sample-rate index: {sample_rate_index}"))
+        TranscodeError::Encode(format!(
+            "unsupported AAC sample-rate index: {sample_rate_index}"
+        ))
     })?;
 
     Ok(AacConfig {

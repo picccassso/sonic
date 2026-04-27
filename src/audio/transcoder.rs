@@ -19,9 +19,7 @@ use crate::{
     errors::TranscodeError,
 };
 #[cfg(feature = "aac-fdk")]
-use fdk_aac::enc::{
-    AudioObjectType, BitRate, ChannelMode, Encoder, EncoderParams, Transport,
-};
+use fdk_aac::enc::{AudioObjectType, BitRate, ChannelMode, Encoder, EncoderParams, Transport};
 
 #[derive(Debug, Clone)]
 pub struct Transcoder {
@@ -137,7 +135,9 @@ impl Transcoder {
                     samples.extend_from_slice(&frame.data);
                 }
                 Err(Mp3Error::Eof) => break,
-                Err(err) => return Err(TranscodeError::Decode(format!("mp3 decode failed: {err}"))),
+                Err(err) => {
+                    return Err(TranscodeError::Decode(format!("mp3 decode failed: {err}")))
+                }
             }
         }
 
@@ -173,18 +173,24 @@ impl Transcoder {
                     reader
                         .samples::<i16>()
                         .map(|s| {
-                            s.map(|sample| scale_i32_to_i16(sample as i32, bits)).map_err(|err| {
-                                TranscodeError::Decode(format!("wav sample decode failed: {err}"))
-                            })
+                            s.map(|sample| scale_i32_to_i16(sample as i32, bits))
+                                .map_err(|err| {
+                                    TranscodeError::Decode(format!(
+                                        "wav sample decode failed: {err}"
+                                    ))
+                                })
                         })
                         .collect()
                 } else {
                     reader
                         .samples::<i32>()
                         .map(|s| {
-                            s.map(|sample| scale_i32_to_i16(sample, bits)).map_err(|err| {
-                                TranscodeError::Decode(format!("wav sample decode failed: {err}"))
-                            })
+                            s.map(|sample| scale_i32_to_i16(sample, bits))
+                                .map_err(|err| {
+                                    TranscodeError::Decode(format!(
+                                        "wav sample decode failed: {err}"
+                                    ))
+                                })
                         })
                         .collect()
                 }
@@ -192,8 +198,9 @@ impl Transcoder {
             WavSampleFormat::Float => reader
                 .samples::<f32>()
                 .map(|s| {
-                    s.map(f32_to_i16)
-                        .map_err(|err| TranscodeError::Decode(format!("wav sample decode failed: {err}")))
+                    s.map(f32_to_i16).map_err(|err| {
+                        TranscodeError::Decode(format!("wav sample decode failed: {err}"))
+                    })
                 })
                 .collect(),
         };
@@ -228,8 +235,9 @@ impl Transcoder {
         let mut samples = Vec::new();
 
         for sample in reader.samples() {
-            let sample = sample
-                .map_err(|err| TranscodeError::Decode(format!("flac sample decode failed: {err}")))?;
+            let sample = sample.map_err(|err| {
+                TranscodeError::Decode(format!("flac sample decode failed: {err}"))
+            })?;
             samples.push(scale_i32_to_i16(sample, bits));
         }
 
@@ -310,7 +318,12 @@ impl Transcoder {
 
         #[cfg(not(feature = "aac-fdk"))]
         {
-            let _ = (pcm.samples.len(), pcm.sample_rate, pcm.channels, bitrate_kbps);
+            let _ = (
+                pcm.samples.len(),
+                pcm.sample_rate,
+                pcm.channels,
+                bitrate_kbps,
+            );
             Err(TranscodeError::NotImplemented(
                 "aac encoder unavailable; rebuild with --features aac-fdk".to_string(),
             ))
@@ -335,7 +348,9 @@ impl Transcoder {
         };
 
         let mut builder = Mp3Builder::new().ok_or_else(|| {
-            TranscodeError::Encode("mp3 encoder init failed: unable to allocate encoder".to_string())
+            TranscodeError::Encode(
+                "mp3 encoder init failed: unable to allocate encoder".to_string(),
+            )
         })?;
 
         builder

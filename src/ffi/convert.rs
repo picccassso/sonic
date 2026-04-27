@@ -1,12 +1,7 @@
 use std::ffi::{c_char, CStr};
 
 use crate::{
-    audio::{
-        detect::InputFormat,
-        output::OutputFormat,
-        preset::QualityPreset,
-        probe::AudioInfo,
-    },
+    audio::{detect::InputFormat, output::OutputFormat, preset::QualityPreset, probe::AudioInfo},
     batch::{BatchTranscodeOptions, BatchTranscodeSummary},
     ffi::types::*,
 };
@@ -66,7 +61,9 @@ pub fn audio_info_to_ffi(info: AudioInfo) -> SonicAudioInfo {
     }
 }
 
-pub fn batch_options_from_ffi(options: SonicBatchOptions) -> Result<BatchTranscodeOptions, (i32, String)> {
+pub fn batch_options_from_ffi(
+    options: SonicBatchOptions,
+) -> Result<BatchTranscodeOptions, (i32, String)> {
     let output_format = parse_output_format(options.transcode.output_format).ok_or_else(|| {
         (
             SONIC_STATUS_INVALID_OUTPUT_FORMAT,

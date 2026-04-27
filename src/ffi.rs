@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    audio::{probe, preset::QualityPreset, transcoder::Transcoder},
+    audio::{preset::QualityPreset, probe, transcoder::Transcoder},
     batch,
     ffi::{
         convert::{
@@ -13,9 +13,7 @@ use crate::{
             batch_options_from_ffi, batch_summary_to_ffi, invalid_output_format_message,
             invalid_preset_message, parse_output_format, parse_paths, parse_preset,
         },
-        support::{
-            buffer_from_vec, drop_buffer, map_error_to_status, reset_buffer, write_error,
-        },
+        support::{buffer_from_vec, drop_buffer, map_error_to_status, reset_buffer, write_error},
     },
 };
 
@@ -206,13 +204,7 @@ pub unsafe extern "C" fn sonic_transcode_mp3_file_to_aac_file(
     output_path: *const c_char,
     out_error: *mut *mut c_char,
 ) -> i32 {
-    sonic_transcode_file_to_format(
-        input_path,
-        preset,
-        SONIC_OUTPUT_AAC,
-        output_path,
-        out_error,
-    )
+    sonic_transcode_file_to_format(input_path, preset, SONIC_OUTPUT_AAC, output_path, out_error)
 }
 
 /// Transcode an MP3/WAV/FLAC file to an AAC, M4A, or MP3 file with a quality preset.
@@ -274,7 +266,10 @@ pub unsafe extern "C" fn sonic_transcode_file(
     let input = match fs::read(&input_path) {
         Ok(bytes) => bytes,
         Err(err) => {
-            write_error(out_error, format!("failed to read input file '{input_path}': {err}"));
+            write_error(
+                out_error,
+                format!("failed to read input file '{input_path}': {err}"),
+            );
             return SONIC_STATUS_INVALID_ARGS;
         }
     };
@@ -296,7 +291,10 @@ pub unsafe extern "C" fn sonic_transcode_file(
     match fs::write(&output_path, output) {
         Ok(()) => SONIC_STATUS_OK,
         Err(err) => {
-            write_error(out_error, format!("failed to write output file '{output_path}': {err}"));
+            write_error(
+                out_error,
+                format!("failed to write output file '{output_path}': {err}"),
+            );
             SONIC_STATUS_INTERNAL_ERROR
         }
     }
@@ -525,7 +523,10 @@ fn transcode_bytes(input: &[u8], options: SonicTranscodeOptions) -> Result<Vec<u
     result.map_err(|err| (map_error_to_status(&err), err.to_string()))
 }
 
-unsafe fn input_slice<'a>(input_ptr: *const u8, input_len: usize) -> Result<&'a [u8], &'static str> {
+unsafe fn input_slice<'a>(
+    input_ptr: *const u8,
+    input_len: usize,
+) -> Result<&'a [u8], &'static str> {
     if input_ptr.is_null() {
         if input_len == 0 {
             Ok(&[])
@@ -578,6 +579,9 @@ mod tests {
             parse_preset(SONIC_PRESET_VERY_HIGH),
             Some(QualityPreset::VeryHigh)
         );
-        assert_eq!(parse_output_format(SONIC_OUTPUT_M4A), Some(crate::audio::output::OutputFormat::M4a));
+        assert_eq!(
+            parse_output_format(SONIC_OUTPUT_M4A),
+            Some(crate::audio::output::OutputFormat::M4a)
+        );
     }
 }

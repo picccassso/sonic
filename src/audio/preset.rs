@@ -39,8 +39,14 @@ mod tests {
     fn parses_preset_case_insensitive() {
         assert_eq!(QualityPreset::from_trigger("LOW"), Some(QualityPreset::Low));
         assert_eq!(QualityPreset::from_trigger("low"), Some(QualityPreset::Low));
-        assert_eq!(QualityPreset::from_trigger("MeDiUm"), Some(QualityPreset::Medium));
-        assert_eq!(QualityPreset::from_trigger("HIGH"), Some(QualityPreset::High));
+        assert_eq!(
+            QualityPreset::from_trigger("MeDiUm"),
+            Some(QualityPreset::Medium)
+        );
+        assert_eq!(
+            QualityPreset::from_trigger("HIGH"),
+            Some(QualityPreset::High)
+        );
         assert_eq!(
             QualityPreset::from_trigger("max"),
             Some(QualityPreset::VeryHigh)

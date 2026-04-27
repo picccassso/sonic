@@ -65,6 +65,31 @@ if (status != SONIC_STATUS_OK) {
 }
 ```
 
+## Directory Batch API
+
+Use the batch API when Sonic should manage a worker pool for a whole folder. `workers = 0` lets Sonic choose from available parallelism; set it explicitly when you want predictable resource usage.
+
+```c
+SonicBatchOptions batch = sonic_default_batch_options();
+batch.transcode.output_format = SONIC_OUTPUT_M4A;
+batch.transcode.preset = SONIC_PRESET_LOW;
+batch.workers = 10;
+
+SonicBatchResult result = {0};
+char* error = NULL;
+
+int32_t status = sonic_transcode_directory("Music Folder", "Output Folder", &batch, &result, &error);
+if (status != SONIC_STATUS_OK) {
+    fprintf(stderr, "batch failed: %s\n", error ? error : "unknown error");
+    sonic_free_c_string(error);
+}
+
+printf("completed=%llu failed=%llu workers=%u\n",
+       (unsigned long long)result.files_completed,
+       (unsigned long long)result.files_failed,
+       result.workers_used);
+```
+
 ## Probe Before Transcoding
 
 ```c

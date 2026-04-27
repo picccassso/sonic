@@ -65,6 +65,22 @@ typedef struct SonicTranscodeOptions {
     uint32_t reserved;
 } SonicTranscodeOptions;
 
+typedef struct SonicBatchOptions {
+    SonicTranscodeOptions transcode;
+    // Set to 0 to use Sonic's default worker count. Set > 0 to choose explicitly.
+    uint32_t workers;
+    uint32_t reserved;
+} SonicBatchOptions;
+
+typedef struct SonicBatchResult {
+    uint64_t files_total;
+    uint64_t files_completed;
+    uint64_t files_failed;
+    uint64_t input_bytes;
+    uint64_t output_bytes;
+    uint32_t workers_used;
+} SonicBatchResult;
+
 typedef struct SonicCapabilities {
     uint32_t abi_version;
     uint32_t input_formats;
@@ -127,6 +143,7 @@ int32_t sonic_transcode(
 );
 
 SonicTranscodeOptions sonic_default_transcode_options(void);
+SonicBatchOptions sonic_default_batch_options(void);
 
 // Compatibility helper: transcodes an MP3 file path to an AAC file path.
 int32_t sonic_transcode_mp3_file_to_aac_file(
@@ -159,6 +176,16 @@ int32_t sonic_transcode_file(
     const char* input_path,
     const SonicTranscodeOptions* options,
     const char* output_path,
+    char** out_error
+);
+
+// Transcodes all supported audio files under input_dir into output_dir.
+// Preserves relative folder structure and writes files with the selected output extension.
+int32_t sonic_transcode_directory(
+    const char* input_dir,
+    const char* output_dir,
+    const SonicBatchOptions* options,
+    SonicBatchResult* out_result,
     char** out_error
 );
 

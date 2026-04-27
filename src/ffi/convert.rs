@@ -7,6 +7,7 @@ use crate::{
         preset::QualityPreset,
         probe::AudioInfo,
     },
+    batch::{BatchTranscodeOptions, BatchTranscodeSummary},
     ffi::types::*,
 };
 
@@ -63,6 +64,56 @@ pub fn audio_info_to_ffi(info: AudioInfo) -> SonicAudioInfo {
         has_metadata: u32::from(info.has_metadata),
         has_artwork: u32::from(info.has_artwork),
     }
+}
+
+pub fn batch_options_from_ffi(options: SonicBatchOptions) -> Result<BatchTranscodeOptions, (i32, String)> {
+    let output_format = parse_output_format(options.transcode.output_format).ok_or_else(|| {
+        (
+            SONIC_STATUS_INVALID_OUTPUT_FORMAT,
+            invalid_output_format_message(options.transcode.output_format),
+        )
+    })?;
+
+    let preset = parse_preset(options.transcode.preset).ok_or_else(|| {
+        (
+            SONIC_STATUS_INVALID_PRESET,
+            invalid_preset_message(options.transcode.preset),
+        )
+    })?;
+
+    Ok(BatchTranscodeOptions {
+        output_format,
+        preset,
+        bitrate_kbps: if options.transcode.bitrate_kbps == 0 {
+            None
+        } else {
+            Some(options.transcode.bitrate_kbps)
+        },
+        workers: options.workers as usize,
+    })
+}
+
+pub fn batch_summary_to_ffi(summary: BatchTranscodeSummary) -> SonicBatchResult {
+    SonicBatchResult {
+        files_total: summary.files_total,
+        files_completed: summary.files_completed,
+        files_failed: summary.files_failed,
+        input_bytes: summary.input_bytes,
+        output_bytes: summary.output_bytes,
+        workers_used: summary.workers_used as u32,
+    }
+}
+
+pub fn invalid_preset_message(preset: u32) -> String {
+    format!(
+        "invalid preset value {preset}; expected SONIC_PRESET_LOW ({SONIC_PRESET_LOW}), SONIC_PRESET_MEDIUM ({SONIC_PRESET_MEDIUM}), SONIC_PRESET_HIGH ({SONIC_PRESET_HIGH}), or SONIC_PRESET_VERY_HIGH ({SONIC_PRESET_VERY_HIGH})"
+    )
+}
+
+pub fn invalid_output_format_message(output_format: u32) -> String {
+    format!(
+        "invalid output format value {output_format}; expected SONIC_OUTPUT_AAC ({SONIC_OUTPUT_AAC}), SONIC_OUTPUT_MP3 ({SONIC_OUTPUT_MP3}), or SONIC_OUTPUT_M4A ({SONIC_OUTPUT_M4A})"
+    )
 }
 
 fn input_format_code(input_format: InputFormat) -> u32 {

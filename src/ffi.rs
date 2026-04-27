@@ -1,14 +1,17 @@
 use std::{
     ffi::{c_char, CString},
     fs,
+    path::Path,
 };
 
 use crate::{
     audio::{probe, preset::QualityPreset, transcoder::Transcoder},
+    batch,
     ffi::{
         convert::{
-            aac_feature_capabilities, aac_output_capabilities, audio_info_to_ffi, parse_output_format,
-            parse_paths, parse_preset,
+            aac_feature_capabilities, aac_output_capabilities, audio_info_to_ffi,
+            batch_options_from_ffi, batch_summary_to_ffi, invalid_output_format_message,
+            invalid_preset_message, parse_output_format, parse_paths, parse_preset,
         },
         support::{
             buffer_from_vec, drop_buffer, map_error_to_status, reset_buffer, write_error,
@@ -21,14 +24,15 @@ pub mod support;
 pub mod types;
 
 pub use types::{
-    SonicAudioInfo, SonicBuffer, SonicCapabilities, SonicTranscodeOptions,
-    SONIC_CAP_AAC_FDK, SONIC_CAP_INPUT_FLAC, SONIC_CAP_INPUT_MP3, SONIC_CAP_INPUT_WAV,
-    SONIC_CAP_OUTPUT_AAC, SONIC_CAP_OUTPUT_M4A, SONIC_CAP_OUTPUT_MP3, SONIC_INPUT_FLAC,
-    SONIC_INPUT_MP3, SONIC_INPUT_WAV, SONIC_OUTPUT_AAC, SONIC_OUTPUT_M4A, SONIC_OUTPUT_MP3,
-    SONIC_PRESET_HIGH, SONIC_PRESET_LOW, SONIC_PRESET_MEDIUM, SONIC_PRESET_VERY_HIGH,
-    SONIC_STATUS_DECODE_ERROR, SONIC_STATUS_ENCODE_ERROR, SONIC_STATUS_INTERNAL_ERROR,
-    SONIC_STATUS_INVALID_ARGS, SONIC_STATUS_INVALID_OUTPUT_FORMAT, SONIC_STATUS_INVALID_PRESET,
-    SONIC_STATUS_NOT_IMPLEMENTED, SONIC_STATUS_OK, SONIC_STATUS_UNSUPPORTED_FORMAT,
+    SonicAudioInfo, SonicBatchOptions, SonicBatchResult, SonicBuffer, SonicCapabilities,
+    SonicTranscodeOptions, SONIC_CAP_AAC_FDK, SONIC_CAP_INPUT_FLAC, SONIC_CAP_INPUT_MP3,
+    SONIC_CAP_INPUT_WAV, SONIC_CAP_OUTPUT_AAC, SONIC_CAP_OUTPUT_M4A, SONIC_CAP_OUTPUT_MP3,
+    SONIC_INPUT_FLAC, SONIC_INPUT_MP3, SONIC_INPUT_WAV, SONIC_OUTPUT_AAC, SONIC_OUTPUT_M4A,
+    SONIC_OUTPUT_MP3, SONIC_PRESET_HIGH, SONIC_PRESET_LOW, SONIC_PRESET_MEDIUM,
+    SONIC_PRESET_VERY_HIGH, SONIC_STATUS_DECODE_ERROR, SONIC_STATUS_ENCODE_ERROR,
+    SONIC_STATUS_INTERNAL_ERROR, SONIC_STATUS_INVALID_ARGS, SONIC_STATUS_INVALID_OUTPUT_FORMAT,
+    SONIC_STATUS_INVALID_PRESET, SONIC_STATUS_NOT_IMPLEMENTED, SONIC_STATUS_OK,
+    SONIC_STATUS_UNSUPPORTED_FORMAT,
 };
 
 /// Transcode MP3 bytes to AAC bytes with a quality preset.
@@ -138,6 +142,16 @@ pub extern "C" fn sonic_default_transcode_options() -> SonicTranscodeOptions {
         output_format: SONIC_OUTPUT_MP3,
         preset: SONIC_PRESET_MEDIUM,
         bitrate_kbps: 0,
+        reserved: 0,
+    }
+}
+
+/// Return default directory batch options.
+#[no_mangle]
+pub extern "C" fn sonic_default_batch_options() -> SonicBatchOptions {
+    SonicBatchOptions {
+        transcode: sonic_default_transcode_options(),
+        workers: 0,
         reserved: 0,
     }
 }
@@ -288,6 +302,59 @@ pub unsafe extern "C" fn sonic_transcode_file(
     }
 }
 
+/// Transcode all supported audio files in a directory tree.
+#[no_mangle]
+pub unsafe extern "C" fn sonic_transcode_directory(
+    input_dir: *const c_char,
+    output_dir: *const c_char,
+    options: *const SonicBatchOptions,
+    out_result: *mut SonicBatchResult,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if out_result.is_null() {
+        return SONIC_STATUS_INVALID_ARGS;
+    }
+
+    *out_result = SonicBatchResult::empty();
+
+    if !out_error.is_null() {
+        *out_error = std::ptr::null_mut();
+    }
+
+    let (input_dir, output_dir) = match parse_paths(input_dir, output_dir) {
+        Ok(paths) => paths,
+        Err(message) => {
+            write_error(out_error, message);
+            return SONIC_STATUS_INVALID_ARGS;
+        }
+    };
+
+    let options = if options.is_null() {
+        sonic_default_batch_options()
+    } else {
+        *options
+    };
+
+    let options = match batch_options_from_ffi(options) {
+        Ok(options) => options,
+        Err((status, message)) => {
+            write_error(out_error, message);
+            return status;
+        }
+    };
+
+    match batch::transcode_directory(Path::new(&input_dir), Path::new(&output_dir), options) {
+        Ok(summary) => {
+            *out_result = batch_summary_to_ffi(summary);
+            SONIC_STATUS_OK
+        }
+        Err(message) => {
+            write_error(out_error, message);
+            SONIC_STATUS_INTERNAL_ERROR
+        }
+    }
+}
+
 /// Probe basic audio properties without producing encoded output.
 #[no_mangle]
 pub unsafe extern "C" fn sonic_probe_audio(
@@ -366,7 +433,7 @@ pub unsafe extern "C" fn sonic_free_c_string(ptr: *mut c_char) {
 /// Returns the ABI version of Sonic FFI.
 #[no_mangle]
 pub extern "C" fn sonic_ffi_abi_version() -> u32 {
-    3
+    4
 }
 
 unsafe fn transcode_preset_to_buffer(
@@ -458,18 +525,6 @@ fn transcode_bytes(input: &[u8], options: SonicTranscodeOptions) -> Result<Vec<u
     result.map_err(|err| (map_error_to_status(&err), err.to_string()))
 }
 
-fn invalid_preset_message(preset: u32) -> String {
-    format!(
-        "invalid preset value {preset}; expected SONIC_PRESET_LOW ({SONIC_PRESET_LOW}), SONIC_PRESET_MEDIUM ({SONIC_PRESET_MEDIUM}), SONIC_PRESET_HIGH ({SONIC_PRESET_HIGH}), or SONIC_PRESET_VERY_HIGH ({SONIC_PRESET_VERY_HIGH})"
-    )
-}
-
-fn invalid_output_format_message(output_format: u32) -> String {
-    format!(
-        "invalid output format value {output_format}; expected SONIC_OUTPUT_AAC ({SONIC_OUTPUT_AAC}), SONIC_OUTPUT_MP3 ({SONIC_OUTPUT_MP3}), or SONIC_OUTPUT_M4A ({SONIC_OUTPUT_M4A})"
-    )
-}
-
 unsafe fn input_slice<'a>(input_ptr: *const u8, input_len: usize) -> Result<&'a [u8], &'static str> {
     if input_ptr.is_null() {
         if input_len == 0 {
@@ -490,7 +545,7 @@ mod tests {
     fn reports_build_capabilities() {
         let caps = sonic_get_capabilities();
 
-        assert_eq!(caps.abi_version, 3);
+        assert_eq!(caps.abi_version, 4);
         assert_ne!(caps.input_formats & SONIC_CAP_INPUT_MP3, 0);
         assert_ne!(caps.input_formats & SONIC_CAP_INPUT_WAV, 0);
         assert_ne!(caps.input_formats & SONIC_CAP_INPUT_FLAC, 0);
@@ -505,6 +560,15 @@ mod tests {
         assert_eq!(options.output_format, SONIC_OUTPUT_MP3);
         assert_eq!(options.preset, SONIC_PRESET_MEDIUM);
         assert_eq!(options.bitrate_kbps, 0);
+    }
+
+    #[test]
+    fn default_batch_options_use_auto_workers() {
+        let options = sonic_default_batch_options();
+
+        assert_eq!(options.transcode.output_format, SONIC_OUTPUT_MP3);
+        assert_eq!(options.transcode.preset, SONIC_PRESET_MEDIUM);
+        assert_eq!(options.workers, 0);
     }
 
     #[test]

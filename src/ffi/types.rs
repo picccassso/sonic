@@ -68,6 +68,38 @@ pub struct SonicTranscodeOptions {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct SonicBatchOptions {
+    pub transcode: SonicTranscodeOptions,
+    pub workers: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SonicBatchResult {
+    pub files_total: u64,
+    pub files_completed: u64,
+    pub files_failed: u64,
+    pub input_bytes: u64,
+    pub output_bytes: u64,
+    pub workers_used: u32,
+}
+
+impl SonicBatchResult {
+    pub fn empty() -> Self {
+        Self {
+            files_total: 0,
+            files_completed: 0,
+            files_failed: 0,
+            input_bytes: 0,
+            output_bytes: 0,
+            workers_used: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct SonicAudioInfo {
     pub input_format: u32,
     pub sample_rate: u32,

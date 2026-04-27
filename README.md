@@ -43,6 +43,8 @@ cargo build --release --features aac-fdk --lib
 - `sonic_transcode_file_to_format_with_bitrate(...)`
 - `sonic_transcode_file(...)` (recommended options-based file API)
 - `sonic_default_transcode_options()`
+- `sonic_transcode_directory(...)` (batch directory API with configurable workers)
+- `sonic_default_batch_options()`
 - `sonic_probe_audio(...)`
 - `sonic_get_capabilities()`
 - `sonic_transcode_mp3_to_aac(...)` (compat helper)
@@ -58,6 +60,21 @@ cargo build --release --features aac-fdk --lib
 - Buffers returned by Sonic must be freed with `sonic_free_buffer`.
 - `SonicBuffer` values returned by `sonic_transcode` must be freed with `sonic_free_output_buffer`.
 - Error strings returned by Sonic must be freed with `sonic_free_c_string`.
+
+## Batch Transcoding
+
+Use the directory batch API when you want Sonic to manage parallel file transcoding:
+
+```c
+SonicBatchOptions batch = sonic_default_batch_options();
+batch.transcode.output_format = SONIC_OUTPUT_M4A;
+batch.transcode.preset = SONIC_PRESET_LOW;
+batch.workers = 10; // 0 means Sonic chooses a default based on available parallelism.
+
+SonicBatchResult result = {0};
+char* error = NULL;
+int32_t status = sonic_transcode_directory("Music Folder", "Output Folder", &batch, &result, &error);
+```
 
 ## C Example
 

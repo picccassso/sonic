@@ -1,6 +1,7 @@
 # Rust build output
 /target/
 /target/bench_runs/
+/dist/
 
 # Local media libraries and benchmark output
 /Music Folder/

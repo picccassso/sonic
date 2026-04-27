@@ -19,11 +19,45 @@ extern "C" {
 #define SONIC_STATUS_INTERNAL_ERROR 7
 #define SONIC_STATUS_INVALID_OUTPUT_FORMAT 8
 
-// Presets for sonic_transcode_mp3_to_aac
+// Presets for preset-based transcode APIs.
 #define SONIC_PRESET_LOW 0
 #define SONIC_PRESET_MEDIUM 1
+#define SONIC_PRESET_HIGH 2
+#define SONIC_PRESET_VERY_HIGH 3
 #define SONIC_OUTPUT_AAC 0
 #define SONIC_OUTPUT_MP3 1
+#define SONIC_OUTPUT_M4A 2
+
+#define SONIC_INPUT_MP3 0
+#define SONIC_INPUT_WAV 1
+#define SONIC_INPUT_FLAC 2
+
+#define SONIC_CAP_INPUT_MP3 (1u << 0)
+#define SONIC_CAP_INPUT_WAV (1u << 1)
+#define SONIC_CAP_INPUT_FLAC (1u << 2)
+#define SONIC_CAP_OUTPUT_AAC (1u << 8)
+#define SONIC_CAP_OUTPUT_MP3 (1u << 9)
+#define SONIC_CAP_OUTPUT_M4A (1u << 10)
+#define SONIC_CAP_AAC_FDK (1u << 16)
+
+typedef struct SonicAudioInfo {
+    uint32_t input_format;
+    uint32_t sample_rate;
+    uint32_t channels;
+    uint32_t bits_per_sample;
+    uint64_t duration_ms;
+    uint64_t total_samples_per_channel;
+    uint32_t has_metadata;
+    uint32_t has_artwork;
+} SonicAudioInfo;
+
+typedef struct SonicCapabilities {
+    uint32_t abi_version;
+    uint32_t input_formats;
+    uint32_t output_formats;
+    uint32_t features;
+    uint32_t preset_count;
+} SonicCapabilities;
 
 // Transcodes MP3 bytes to AAC bytes.
 //
@@ -45,7 +79,7 @@ int32_t sonic_transcode_mp3_to_aac(
     char** out_error
 );
 
-// Generic transcode API supporting MP3/WAV/FLAC input and AAC/MP3 output.
+// Generic transcode API supporting MP3/WAV/FLAC input and AAC/MP3/M4A output.
 int32_t sonic_transcode_to_format(
     const uint8_t* input_ptr,
     size_t input_len,
@@ -57,7 +91,19 @@ int32_t sonic_transcode_to_format(
     char** out_error
 );
 
-// Transcodes an MP3 file path to an AAC file path.
+// Generic buffer transcode API with an explicit bitrate in kbps.
+int32_t sonic_transcode_to_format_with_bitrate(
+    const uint8_t* input_ptr,
+    size_t input_len,
+    uint32_t bitrate_kbps,
+    uint32_t output_format,
+    uint8_t** out_data_ptr,
+    size_t* out_data_len,
+    size_t* out_data_cap,
+    char** out_error
+);
+
+// Compatibility helper: transcodes an MP3 file path to an AAC file path.
 int32_t sonic_transcode_mp3_file_to_aac_file(
     const char* input_path,
     uint32_t preset,
@@ -65,6 +111,33 @@ int32_t sonic_transcode_mp3_file_to_aac_file(
     char** out_error
 );
 
+// Generic file transcode API supporting MP3/WAV/FLAC input and AAC/MP3/M4A output.
+int32_t sonic_transcode_file_to_format(
+    const char* input_path,
+    uint32_t preset,
+    uint32_t output_format,
+    const char* output_path,
+    char** out_error
+);
+
+// Generic file transcode API with an explicit bitrate in kbps.
+int32_t sonic_transcode_file_to_format_with_bitrate(
+    const char* input_path,
+    uint32_t bitrate_kbps,
+    uint32_t output_format,
+    const char* output_path,
+    char** out_error
+);
+
+// Probes audio properties without transcoding.
+int32_t sonic_probe_audio(
+    const uint8_t* input_ptr,
+    size_t input_len,
+    SonicAudioInfo* out_info,
+    char** out_error
+);
+
+SonicCapabilities sonic_get_capabilities(void);
 void sonic_free_buffer(uint8_t* ptr, size_t len, size_t cap);
 void sonic_free_c_string(char* ptr);
 uint32_t sonic_ffi_abi_version(void);

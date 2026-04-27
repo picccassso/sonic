@@ -5,10 +5,16 @@ Sonic is a lightweight Rust audio transcoder for embedding directly into your ap
 ## What It Does
 
 - Input: `MP3`, `WAV`, `FLAC`
-- Output: `AAC` (ADTS) or `MP3`
+- Output: `AAC` (ADTS), `M4A`, or `MP3`
 - Presets:
   - `LOW` = `64 kbps`
   - `MEDIUM` = `128 kbps`
+  - `HIGH` = `192 kbps`
+  - `VERY_HIGH` = `320 kbps`
+- Custom bitrate APIs for callers that need an exact target bitrate
+- Probe API for format, sample rate, channels, duration, bit depth, and metadata/artwork presence
+- Basic MP3 ID3 metadata/artwork preservation when writing MP3 or ADTS AAC
+- Capability reporting for the current build
 - FFI API for desktop/headless builds on macOS, Linux, and Windows
 
 ## Basic Setup
@@ -30,7 +36,13 @@ cargo build --release --features aac-fdk --lib
 ## FFI Entry Points
 
 - `sonic_transcode_to_format(...)` (recommended)
+- `sonic_transcode_to_format_with_bitrate(...)`
+- `sonic_transcode_file_to_format(...)`
+- `sonic_transcode_file_to_format_with_bitrate(...)`
+- `sonic_probe_audio(...)`
+- `sonic_get_capabilities()`
 - `sonic_transcode_mp3_to_aac(...)` (compat helper)
+- `sonic_transcode_mp3_file_to_aac_file(...)` (compat helper)
 - `sonic_free_buffer(...)`
 - `sonic_free_c_string(...)`
 - `sonic_ffi_abi_version()`
@@ -38,5 +50,6 @@ cargo build --release --features aac-fdk --lib
 ## Notes
 
 - AAC encoding requires building with `--features aac-fdk`.
+- `M4A` output also requires `--features aac-fdk` because it wraps Sonic's AAC encoder output.
 - Buffers returned by Sonic must be freed with `sonic_free_buffer`.
 - Error strings returned by Sonic must be freed with `sonic_free_c_string`.

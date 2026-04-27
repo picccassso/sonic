@@ -8,10 +8,10 @@ pub enum TranscodeError {
     #[error("unsupported input format; expected MP3, WAV, or FLAC")]
     UnsupportedFormat,
 
-    #[error("invalid preset '{0}'; expected one of: LOW, MEDIUM")]
+    #[error("invalid preset '{0}'; expected one of: LOW, MEDIUM, HIGH, VERY_HIGH")]
     InvalidPreset(String),
 
-    #[error("invalid output format '{0}'; expected one of: aac, mp3")]
+    #[error("invalid output format '{0}'; expected one of: aac, m4a, mp3")]
     InvalidOutputFormat(String),
 
     #[error("decode error: {0}")]

@@ -2,7 +2,6 @@ use std::io::Cursor;
 
 use claxon::FlacReader;
 use hound::{SampleFormat as WavSampleFormat, WavReader};
-use id3::{Tag, TagLike, Version};
 use minimp3::{Decoder, Error as Mp3Error};
 use mp3lame_encoder::{
     max_required_buffer_size, Bitrate as Mp3Bitrate, Builder as Mp3Builder, FlushNoGap,
@@ -12,6 +11,8 @@ use mp3lame_encoder::{
 use crate::{
     audio::{
         detect::{self, InputFormat},
+        m4a,
+        metadata::{self, AudioMetadata},
         output::OutputFormat,
         preset::QualityPreset,
     },
@@ -83,8 +84,8 @@ impl Transcoder {
         }
 
         let input_format = detect::detect_format(input)?;
-        let artwork = if input_format == InputFormat::Mp3 {
-            extract_cover_art(input)
+        let metadata = if input_format == InputFormat::Mp3 {
+            metadata::extract_mp3_metadata(input)
         } else {
             None
         };
@@ -97,11 +98,15 @@ impl Transcoder {
 
         let mut output = match output_format {
             OutputFormat::Aac => self.encode_aac(&pcm, bitrate_kbps)?,
+            OutputFormat::M4a => {
+                let adts = self.encode_aac(&pcm, bitrate_kbps)?;
+                m4a::adts_to_m4a(&adts, bitrate_kbps)?
+            }
             OutputFormat::Mp3 => self.encode_mp3(&pcm, bitrate_kbps)?,
         };
 
-        if let Some(picture) = artwork {
-            output = prepend_id3_artwork(output, picture)?;
+        if let Some(metadata) = metadata {
+            output = apply_metadata(output, &metadata, output_format)?;
         }
 
         Ok(output)
@@ -388,25 +393,16 @@ impl Transcoder {
     }
 }
 
-fn extract_cover_art(input: &[u8]) -> Option<id3::frame::Picture> {
-    let mut cursor = Cursor::new(input);
-    let tag = Tag::read_from2(&mut cursor).ok()?;
-    let picture = tag.pictures().next().cloned();
-    picture
-}
-
-fn prepend_id3_artwork(
+fn apply_metadata(
     data: Vec<u8>,
-    picture: id3::frame::Picture,
+    metadata: &AudioMetadata,
+    output_format: OutputFormat,
 ) -> Result<Vec<u8>, TranscodeError> {
-    let mut tag = Tag::new();
-    tag.add_frame(picture);
-
-    let mut tagged = Vec::new();
-    tag.write_to(&mut tagged, Version::Id3v24)
-        .map_err(|err| TranscodeError::Encode(format!("failed to write ID3 artwork tag: {err}")))?;
-    tagged.extend_from_slice(&data);
-    Ok(tagged)
+    match output_format {
+        // ID3 before ADTS is widely tolerated and keeps the raw AAC path lightweight.
+        OutputFormat::Aac | OutputFormat::Mp3 => metadata::prepend_id3_metadata(data, metadata),
+        OutputFormat::M4a => Ok(data),
+    }
 }
 
 fn scale_i32_to_i16(sample: i32, source_bits_per_sample: u32) -> i16 {
@@ -462,4 +458,52 @@ fn mp3_bitrate_from_kbps(kbps: u32) -> Mp3Bitrate {
     }
 
     best.1
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "aac-fdk")]
+    use std::io::Cursor;
+
+    #[cfg(feature = "aac-fdk")]
+    use hound::{SampleFormat, WavSpec, WavWriter};
+
+    #[cfg(feature = "aac-fdk")]
+    use super::Transcoder;
+    #[cfg(feature = "aac-fdk")]
+    use crate::audio::output::OutputFormat;
+
+    #[cfg(feature = "aac-fdk")]
+    #[test]
+    fn transcodes_wav_to_m4a_when_aac_feature_is_enabled() {
+        let input = tiny_wav();
+        let transcoder = Transcoder::new(128);
+        let output = transcoder
+            .transcode_with_bitrate_and_format(&input, 128, OutputFormat::M4a)
+            .expect("transcode wav to m4a");
+
+        assert_eq!(&output[4..8], b"ftyp");
+        assert!(output.windows(4).any(|window| window == b"moov"));
+        assert!(output.windows(4).any(|window| window == b"mdat"));
+    }
+
+    #[cfg(feature = "aac-fdk")]
+    fn tiny_wav() -> Vec<u8> {
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let spec = WavSpec {
+                channels: 2,
+                sample_rate: 44_100,
+                bits_per_sample: 16,
+                sample_format: SampleFormat::Int,
+            };
+            let mut writer = WavWriter::new(&mut cursor, spec).expect("create wav writer");
+            for _ in 0..2048 {
+                writer.write_sample::<i16>(0).expect("write left");
+                writer.write_sample::<i16>(0).expect("write right");
+            }
+            writer.finalize().expect("finalize wav");
+        }
+        cursor.into_inner()
+    }
 }

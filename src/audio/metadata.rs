@@ -1,5 +1,5 @@
 use id3::{frame::Picture, Tag, TagLike, Version};
-use std::io::Cursor;
+use std::{io::Cursor, path::Path};
 
 use crate::errors::TranscodeError;
 
@@ -29,6 +29,15 @@ impl AudioMetadata {
 pub fn extract_mp3_metadata(input: &[u8]) -> Option<AudioMetadata> {
     let mut cursor = Cursor::new(input);
     let tag = Tag::read_from2(&mut cursor).ok()?;
+    tag_to_metadata(tag)
+}
+
+pub fn extract_mp3_metadata_from_path(path: &Path) -> Option<AudioMetadata> {
+    let tag = Tag::read_from_path(path).ok()?;
+    tag_to_metadata(tag)
+}
+
+fn tag_to_metadata(tag: Tag) -> Option<AudioMetadata> {
     let artwork = tag.pictures().next().cloned();
     Some(AudioMetadata {
         title: tag.title().map(str::to_owned),
@@ -41,6 +50,19 @@ pub fn extract_mp3_metadata(input: &[u8]) -> Option<AudioMetadata> {
     })
 }
 
+pub fn write_id3_metadata(
+    out: &mut impl std::io::Write,
+    metadata: &AudioMetadata,
+) -> Result<(), TranscodeError> {
+    if metadata.is_empty() {
+        return Ok(());
+    }
+
+    let tag = metadata_to_tag(metadata);
+    tag.write_to(out, Version::Id3v24)
+        .map_err(|err| TranscodeError::Encode(format!("failed to write ID3 metadata: {err}")))
+}
+
 pub fn prepend_id3_metadata(
     data: Vec<u8>,
     metadata: &AudioMetadata,
@@ -49,6 +71,15 @@ pub fn prepend_id3_metadata(
         return Ok(data);
     }
 
+    let tag = metadata_to_tag(metadata);
+    let mut tagged = Vec::new();
+    tag.write_to(&mut tagged, Version::Id3v24)
+        .map_err(|err| TranscodeError::Encode(format!("failed to write ID3 metadata: {err}")))?;
+    tagged.extend_from_slice(&data);
+    Ok(tagged)
+}
+
+fn metadata_to_tag(metadata: &AudioMetadata) -> Tag {
     let mut tag = Tag::new();
 
     if let Some(value) = &metadata.title {
@@ -73,11 +104,7 @@ pub fn prepend_id3_metadata(
         tag.add_frame(value);
     }
 
-    let mut tagged = Vec::new();
-    tag.write_to(&mut tagged, Version::Id3v24)
-        .map_err(|err| TranscodeError::Encode(format!("failed to write ID3 metadata: {err}")))?;
-    tagged.extend_from_slice(&data);
-    Ok(tagged)
+    tag
 }
 
 #[cfg(test)]

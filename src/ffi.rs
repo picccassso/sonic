@@ -263,6 +263,50 @@ pub unsafe extern "C" fn sonic_transcode_file(
         }
     };
 
+    let options = if options.is_null() {
+        sonic_default_transcode_options()
+    } else {
+        *options
+    };
+
+    let output_format = match parse_output_format(options.output_format) {
+        Some(format) => format,
+        None => {
+            write_error(
+                out_error,
+                invalid_output_format_message(options.output_format),
+            );
+            return SONIC_STATUS_INVALID_OUTPUT_FORMAT;
+        }
+    };
+
+    let bitrate_kbps = if options.bitrate_kbps > 0 {
+        options.bitrate_kbps
+    } else {
+        match parse_preset(options.preset) {
+            Some(preset) => preset.bitrate_kbps(),
+            None => {
+                write_error(out_error, invalid_preset_message(options.preset));
+                return SONIC_STATUS_INVALID_PRESET;
+            }
+        }
+    };
+
+    if output_format == crate::audio::output::OutputFormat::Aac && is_mp3_path(&input_path) {
+        let transcoder = Transcoder::new(bitrate_kbps);
+        match transcoder.transcode_mp3_file_to_aac_path(
+            Path::new(&input_path),
+            Path::new(&output_path),
+            bitrate_kbps,
+        ) {
+            Ok(()) => return SONIC_STATUS_OK,
+            Err(err) => {
+                write_error(out_error, err.to_string());
+                return map_error_to_status(&err);
+            }
+        }
+    }
+
     let input = match fs::read(&input_path) {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -272,12 +316,6 @@ pub unsafe extern "C" fn sonic_transcode_file(
             );
             return SONIC_STATUS_INVALID_ARGS;
         }
-    };
-
-    let options = if options.is_null() {
-        sonic_default_transcode_options()
-    } else {
-        *options
     };
 
     let output = match transcode_bytes(&input, options) {
@@ -298,6 +336,14 @@ pub unsafe extern "C" fn sonic_transcode_file(
             SONIC_STATUS_INTERNAL_ERROR
         }
     }
+}
+
+fn is_mp3_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("mp3"))
+        .unwrap_or(false)
 }
 
 /// Transcode all supported audio files in a directory tree.

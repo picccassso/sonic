@@ -1,3 +1,5 @@
+use std::io::{Seek, SeekFrom, Write};
+
 use crate::errors::TranscodeError;
 
 #[derive(Debug, Clone)]
@@ -17,25 +19,143 @@ struct AacConfig {
 
 pub fn adts_to_m4a(adts: &[u8], bitrate_kbps: u32) -> Result<Vec<u8>, TranscodeError> {
     let config = parse_adts(adts)?;
-    let mut aac_payload = Vec::new();
     let mut sample_sizes = Vec::with_capacity(config.frames.len());
 
     for frame in &config.frames {
-        aac_payload.extend_from_slice(&adts[frame.data_offset..frame.data_offset + frame.data_len]);
         sample_sizes.push(frame.data_len as u32);
     }
 
     let ftyp = atom(b"ftyp", &ftyp_payload());
     let mdat_header_len = 8usize;
     let first_sample_offset = (ftyp.len() + mdat_header_len) as u32;
-    let mdat = atom(b"mdat", &aac_payload);
     let moov = moov_payload(&config, &sample_sizes, first_sample_offset, bitrate_kbps);
+    let aac_payload_len = sample_sizes
+        .iter()
+        .map(|size| *size as usize)
+        .sum::<usize>();
 
-    let mut out = Vec::with_capacity(ftyp.len() + mdat.len() + moov.len());
+    let mut out = Vec::with_capacity(ftyp.len() + mdat_header_len + aac_payload_len + moov.len());
     out.extend_from_slice(&ftyp);
-    out.extend_from_slice(&mdat);
+    write_atom_header(&mut out, b"mdat", aac_payload_len)?;
+    for frame in &config.frames {
+        out.extend_from_slice(&adts[frame.data_offset..frame.data_offset + frame.data_len]);
+    }
     out.extend_from_slice(&moov);
     Ok(out)
+}
+
+pub struct M4aWriter<W: Write + Seek> {
+    writer: W,
+    bitrate_kbps: u32,
+    config: Option<AacConfig>,
+    sample_sizes: Vec<u32>,
+    mdat_header_offset: u64,
+    first_sample_offset: u32,
+    aac_payload_len: u64,
+}
+
+impl<W: Write + Seek> M4aWriter<W> {
+    pub fn new(mut writer: W, bitrate_kbps: u32) -> Result<Self, TranscodeError> {
+        let ftyp = atom(b"ftyp", &ftyp_payload());
+        writer.write_all(&ftyp).map_err(|err| {
+            TranscodeError::Encode(format!("failed to write M4A ftyp atom: {err}"))
+        })?;
+
+        let mdat_header_offset = writer
+            .stream_position()
+            .map_err(|err| TranscodeError::Encode(format!("failed to seek M4A output: {err}")))?;
+        writer
+            .write_all(&[0, 0, 0, 0])
+            .and_then(|_| writer.write_all(b"mdat"))
+            .map_err(|err| {
+                TranscodeError::Encode(format!("failed to write M4A mdat atom: {err}"))
+            })?;
+        let first_sample_offset = writer
+            .stream_position()
+            .map_err(|err| TranscodeError::Encode(format!("failed to seek M4A output: {err}")))?
+            .try_into()
+            .map_err(|_| {
+                TranscodeError::Encode("M4A sample offset exceeded 32-bit limit".to_string())
+            })?;
+
+        Ok(Self {
+            writer,
+            bitrate_kbps,
+            config: None,
+            sample_sizes: Vec::new(),
+            mdat_header_offset,
+            first_sample_offset,
+            aac_payload_len: 0,
+        })
+    }
+
+    pub fn write_adts(&mut self, adts: &[u8]) -> Result<(), TranscodeError> {
+        let config = parse_adts(adts)?;
+        if let Some(existing) = self.config.as_ref() {
+            if !same_aac_config(existing, &config) {
+                return Err(TranscodeError::Encode(
+                    "AAC stream changed configuration mid-stream".to_string(),
+                ));
+            }
+        } else {
+            self.config = Some(config.clone());
+        }
+
+        for frame in config.frames {
+            let payload = &adts[frame.data_offset..frame.data_offset + frame.data_len];
+            self.writer.write_all(payload).map_err(|err| {
+                TranscodeError::Encode(format!("failed to write M4A AAC payload: {err}"))
+            })?;
+            self.sample_sizes.push(frame.data_len as u32);
+            self.aac_payload_len = self.aac_payload_len.saturating_add(frame.data_len as u64);
+        }
+
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<W, TranscodeError> {
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| TranscodeError::Encode("invalid or empty ADTS stream".to_string()))?;
+        let mdat_size: u32 = self
+            .aac_payload_len
+            .checked_add(8)
+            .and_then(|size| size.try_into().ok())
+            .ok_or_else(|| {
+                TranscodeError::Encode("M4A mdat atom exceeded 32-bit limit".to_string())
+            })?;
+        let moov = moov_payload(
+            config,
+            &self.sample_sizes,
+            self.first_sample_offset,
+            self.bitrate_kbps,
+        );
+
+        self.writer.write_all(&moov).map_err(|err| {
+            TranscodeError::Encode(format!("failed to write M4A moov atom: {err}"))
+        })?;
+        let end = self
+            .writer
+            .stream_position()
+            .map_err(|err| TranscodeError::Encode(format!("failed to seek M4A output: {err}")))?;
+        self.writer
+            .seek(SeekFrom::Start(self.mdat_header_offset))
+            .and_then(|_| self.writer.write_all(&mdat_size.to_be_bytes()))
+            .and_then(|_| self.writer.seek(SeekFrom::Start(end)))
+            .map_err(|err| {
+                TranscodeError::Encode(format!("failed to finalize M4A output: {err}"))
+            })?;
+
+        Ok(self.writer)
+    }
+}
+
+fn same_aac_config(a: &AacConfig, b: &AacConfig) -> bool {
+    a.audio_object_type == b.audio_object_type
+        && a.sample_rate_index == b.sample_rate_index
+        && a.sample_rate == b.sample_rate
+        && a.channel_config == b.channel_config
 }
 
 fn parse_adts(input: &[u8]) -> Result<AacConfig, TranscodeError> {
@@ -396,6 +516,20 @@ fn atom(name: &[u8; 4], payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn write_atom_header(
+    out: &mut Vec<u8>,
+    name: &[u8; 4],
+    payload_len: usize,
+) -> Result<(), TranscodeError> {
+    let atom_len: u32 = payload_len
+        .checked_add(8)
+        .and_then(|len| len.try_into().ok())
+        .ok_or_else(|| TranscodeError::Encode("M4A atom exceeded 32-bit limit".to_string()))?;
+    write_u32(out, atom_len);
+    out.extend_from_slice(name);
+    Ok(())
+}
+
 fn full_atom_payload(version: u8, flags: u32) -> Vec<u8> {
     vec![
         version,
@@ -459,7 +593,9 @@ fn sample_rate_from_index(index: u8) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::adts_to_m4a;
+    use std::io::Cursor;
+
+    use super::{adts_to_m4a, M4aWriter};
 
     #[test]
     fn wraps_adts_frames_in_m4a_container() {
@@ -477,6 +613,21 @@ mod tests {
     fn rejects_non_adts_input() {
         let err = adts_to_m4a(b"not aac", 128).expect_err("reject invalid adts");
         assert!(err.to_string().contains("ADTS"));
+    }
+
+    #[test]
+    fn streams_adts_frames_to_the_same_m4a_container() {
+        let first = adts_frame(&[0x21, 0x10, 0x04]);
+        let second = adts_frame(&[0x21, 0x10, 0x04]);
+        let expected = adts_to_m4a(&[first.clone(), second.clone()].concat(), 128)
+            .expect("wrap ADTS in memory");
+
+        let mut writer = M4aWriter::new(Cursor::new(Vec::new()), 128).expect("create M4A writer");
+        writer.write_adts(&first).expect("write first ADTS frame");
+        writer.write_adts(&second).expect("write second ADTS frame");
+        let actual = writer.finish().expect("finish M4A").into_inner();
+
+        assert_eq!(actual, expected);
     }
 
     fn two_silent_aac_frames() -> Vec<u8> {

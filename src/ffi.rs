@@ -292,13 +292,27 @@ pub unsafe extern "C" fn sonic_transcode_file(
         }
     };
 
-    if output_format == crate::audio::output::OutputFormat::Aac && is_mp3_path(&input_path) {
+    if is_mp3_path(&input_path)
+        && matches!(
+            output_format,
+            crate::audio::output::OutputFormat::Aac | crate::audio::output::OutputFormat::M4a
+        )
+    {
         let transcoder = Transcoder::new(bitrate_kbps);
-        match transcoder.transcode_mp3_file_to_aac_path(
-            Path::new(&input_path),
-            Path::new(&output_path),
-            bitrate_kbps,
-        ) {
+        let result = match output_format {
+            crate::audio::output::OutputFormat::Aac => transcoder.transcode_mp3_file_to_aac_path(
+                Path::new(&input_path),
+                Path::new(&output_path),
+                bitrate_kbps,
+            ),
+            crate::audio::output::OutputFormat::M4a => transcoder.transcode_mp3_file_to_m4a_path(
+                Path::new(&input_path),
+                Path::new(&output_path),
+                bitrate_kbps,
+            ),
+            crate::audio::output::OutputFormat::Mp3 => unreachable!(),
+        };
+        match result {
             Ok(()) => return SONIC_STATUS_OK,
             Err(err) => {
                 write_error(out_error, err.to_string());

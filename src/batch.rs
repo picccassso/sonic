@@ -141,14 +141,42 @@ fn transcode_job(
     job: &BatchJob,
     options: BatchTranscodeOptions,
 ) -> Result<(u64, u64), String> {
-    let input = fs::read(&job.input_path)
-        .map_err(|err| format!("failed to read '{}': {err}", job.input_path.display()))?;
-    let input_bytes = input.len() as u64;
-
     if let Some(parent) = job.output_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create '{}': {err}", parent.display()))?;
     }
+
+    let bitrate_kbps = options
+        .bitrate_kbps
+        .unwrap_or_else(|| options.preset.bitrate_kbps());
+    if is_mp3_path(&job.input_path) {
+        let streamed = match options.output_format {
+            OutputFormat::Aac => Some(transcoder.transcode_mp3_file_to_aac_path(
+                &job.input_path,
+                &job.output_path,
+                bitrate_kbps,
+            )),
+            OutputFormat::M4a => Some(transcoder.transcode_mp3_file_to_m4a_path(
+                &job.input_path,
+                &job.output_path,
+                bitrate_kbps,
+            )),
+            OutputFormat::Mp3 => None,
+        };
+
+        if let Some(result) = streamed {
+            result.map_err(|err| {
+                format!("failed to transcode '{}': {err}", job.input_path.display())
+            })?;
+            let input_bytes = file_len(&job.input_path)?;
+            let output_bytes = file_len(&job.output_path)?;
+            return Ok((input_bytes, output_bytes));
+        }
+    }
+
+    let input = fs::read(&job.input_path)
+        .map_err(|err| format!("failed to read '{}': {err}", job.input_path.display()))?;
+    let input_bytes = input.len() as u64;
 
     let output = if let Some(bitrate_kbps) = options.bitrate_kbps {
         transcoder.transcode_with_bitrate_and_format(&input, bitrate_kbps, options.output_format)
@@ -162,6 +190,19 @@ fn transcode_job(
         .map_err(|err| format!("failed to write '{}': {err}", job.output_path.display()))?;
 
     Ok((input_bytes, output_bytes))
+}
+
+fn file_len(path: &Path) -> Result<u64, String> {
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .map_err(|err| format!("failed to stat '{}': {err}", path.display()))
+}
+
+fn is_mp3_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("mp3"))
+        .unwrap_or(false)
 }
 
 fn collect_jobs(
@@ -248,6 +289,8 @@ mod tests {
     use hound::{SampleFormat, WavSpec, WavWriter};
 
     use super::{transcode_directory, BatchTranscodeOptions};
+    #[cfg(feature = "aac-fdk")]
+    use crate::audio::transcoder::Transcoder;
     use crate::audio::{output::OutputFormat, preset::QualityPreset};
 
     #[test]
@@ -280,6 +323,39 @@ mod tests {
         assert!(output.join("album").join("one.mp3").exists());
         assert!(output.join("two.mp3").exists());
         assert!(!output.join("skip.mp3").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(feature = "aac-fdk")]
+    #[test]
+    fn batch_streams_mp3_files_to_m4a() {
+        let root = temp_dir("sonic-streaming-batch-test");
+        let input = root.join("input");
+        let output = root.join("output");
+        fs::create_dir_all(&input).expect("create input dir");
+
+        let mp3 = Transcoder::new(128)
+            .transcode_with_bitrate_and_format(&tiny_wav(), 128, OutputFormat::Mp3)
+            .expect("create mp3 fixture");
+        fs::write(input.join("track.mp3"), mp3).expect("write mp3 fixture");
+
+        let summary = transcode_directory(
+            &input,
+            &output,
+            BatchTranscodeOptions {
+                output_format: OutputFormat::M4a,
+                preset: QualityPreset::Low,
+                bitrate_kbps: None,
+                workers: 1,
+            },
+        )
+        .expect("batch transcode");
+
+        assert_eq!(summary.files_completed, 1);
+        assert_eq!(summary.files_failed, 0);
+        let m4a = fs::read(output.join("track.m4a")).expect("read m4a output");
+        assert_eq!(&m4a[4..8], b"ftyp");
 
         let _ = fs::remove_dir_all(root);
     }

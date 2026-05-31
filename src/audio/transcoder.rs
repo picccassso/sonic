@@ -172,6 +172,56 @@ impl Transcoder {
         }
     }
 
+    pub fn transcode_mp3_file_to_m4a_path(
+        &self,
+        input_path: &Path,
+        output_path: &Path,
+        bitrate_kbps: u32,
+    ) -> Result<(), TranscodeError> {
+        if bitrate_kbps == 0 {
+            return Err(TranscodeError::Encode("bitrate must be > 0".to_string()));
+        }
+
+        #[cfg(feature = "aac-fdk")]
+        {
+            let input = File::open(input_path).map_err(|err| {
+                TranscodeError::Decode(format!(
+                    "failed to open input file '{}': {err}",
+                    input_path.display()
+                ))
+            })?;
+            let output = File::create(output_path).map_err(|err| {
+                TranscodeError::Encode(format!(
+                    "failed to create output file '{}': {err}",
+                    output_path.display()
+                ))
+            })?;
+
+            let mut writer = m4a::M4aWriter::new(BufWriter::new(output), bitrate_kbps)?;
+            self.transcode_mp3_reader_to_aac_sink(
+                BufReader::new(input),
+                |adts| writer.write_adts(adts),
+                bitrate_kbps,
+            )?;
+            let mut writer = writer.finish()?;
+            writer.flush().map_err(|err| {
+                TranscodeError::Encode(format!(
+                    "failed to flush output file '{}': {err}",
+                    output_path.display()
+                ))
+            })?;
+            return Ok(());
+        }
+
+        #[cfg(not(feature = "aac-fdk"))]
+        {
+            let _ = (input_path, output_path, bitrate_kbps);
+            Err(TranscodeError::NotImplemented(
+                "aac encoder unavailable; rebuild with --features aac-fdk".to_string(),
+            ))
+        }
+    }
+
     fn decode_mp3(&self, input: &[u8]) -> Result<PcmAudio, TranscodeError> {
         let mut decoder = Decoder::new(Cursor::new(input));
 
@@ -404,6 +454,28 @@ impl Transcoder {
         writer: &mut W,
         bitrate_kbps: u32,
     ) -> Result<(), TranscodeError> {
+        self.transcode_mp3_reader_to_aac_sink(
+            reader,
+            |adts| {
+                writer.write_all(adts).map_err(|err| {
+                    TranscodeError::Encode(format!("aac output write failed: {err}"))
+                })
+            },
+            bitrate_kbps,
+        )
+    }
+
+    #[cfg(feature = "aac-fdk")]
+    fn transcode_mp3_reader_to_aac_sink<R, F>(
+        &self,
+        reader: R,
+        mut sink: F,
+        bitrate_kbps: u32,
+    ) -> Result<(), TranscodeError>
+    where
+        R: std::io::Read,
+        F: FnMut(&[u8]) -> Result<(), TranscodeError>,
+    {
         let mut decoder = Decoder::new(reader);
         let mut encoder = None;
         let mut sample_rate = None;
@@ -431,11 +503,11 @@ impl Transcoder {
                     }
 
                     if let Some(encoder) = encoder.as_ref() {
-                        encode_aac_samples_to_writer(
+                        encode_aac_samples_to_sink(
                             encoder,
                             &frame.data,
                             &mut output_buf,
-                            writer,
+                            &mut sink,
                             "aac encode failed",
                         )?;
                     }
@@ -461,11 +533,7 @@ impl Transcoder {
                     .map_err(|err| TranscodeError::Encode(format!("aac flush failed: {err}")))?;
 
                 if info.output_size > 0 {
-                    writer
-                        .write_all(&output_buf[..info.output_size])
-                        .map_err(|err| {
-                            TranscodeError::Encode(format!("aac output write failed: {err}"))
-                        })?;
+                    sink(&output_buf[..info.output_size])?;
                 }
 
                 if info.output_size == 0 {
@@ -594,11 +662,11 @@ fn new_aac_encoder(
 }
 
 #[cfg(feature = "aac-fdk")]
-fn encode_aac_samples_to_writer(
+fn encode_aac_samples_to_sink(
     encoder: &Encoder,
     samples: &[i16],
     output_buf: &mut [u8],
-    writer: &mut impl Write,
+    sink: &mut impl FnMut(&[u8]) -> Result<(), TranscodeError>,
     error_context: &str,
 ) -> Result<(), TranscodeError> {
     let mut consumed = 0usize;
@@ -609,9 +677,7 @@ fn encode_aac_samples_to_writer(
             .map_err(|err| TranscodeError::Encode(format!("{error_context}: {err}")))?;
 
         if info.output_size > 0 {
-            writer
-                .write_all(&output_buf[..info.output_size])
-                .map_err(|err| TranscodeError::Encode(format!("aac output write failed: {err}")))?;
+            sink(&output_buf[..info.output_size])?;
         }
 
         if info.input_consumed == 0 && info.output_size == 0 {
@@ -779,6 +845,33 @@ mod tests {
         assert!(output.len() > 7);
         assert_eq!(output[0], 0xFF);
         assert_eq!(output[1] & 0xF0, 0xF0);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(feature = "aac-fdk")]
+    #[test]
+    fn streams_mp3_file_to_m4a_file_when_aac_feature_is_enabled() {
+        let input_wav = tiny_wav();
+        let transcoder = Transcoder::new(128);
+        let mp3 = transcoder
+            .transcode_with_bitrate_and_format(&input_wav, 128, OutputFormat::Mp3)
+            .expect("create mp3 fixture");
+
+        let root = temp_dir("sonic-streaming-mp3-m4a-test");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let input_path = root.join("input.mp3");
+        let output_path = root.join("output.m4a");
+        fs::write(&input_path, mp3).expect("write mp3 input");
+
+        transcoder
+            .transcode_mp3_file_to_m4a_path(&input_path, &output_path, 64)
+            .expect("stream mp3 to m4a");
+
+        let output = fs::read(&output_path).expect("read m4a output");
+        assert_eq!(&output[4..8], b"ftyp");
+        assert!(output.windows(4).any(|window| window == b"moov"));
+        assert!(output.windows(4).any(|window| window == b"mdat"));
 
         let _ = fs::remove_dir_all(root);
     }

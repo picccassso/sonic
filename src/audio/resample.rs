@@ -1,6 +1,4 @@
-use rubato::{
-    audioadapter_buffers::owned::InterleavedOwned, Fft, FixedSync, Resampler,
-};
+use rubato::{audioadapter_buffers::owned::InterleavedOwned, Fft, FixedSync, Resampler};
 
 use crate::{audio::pcm::PcmAudio, errors::TranscodeError};
 
@@ -65,11 +63,7 @@ pub fn resample(pcm: &PcmAudio, target_sample_rate: u32) -> Result<PcmAudio, Tra
         output_i16.push(clamped as i16);
     }
 
-    Ok(PcmAudio::new(
-        output_i16,
-        target_sample_rate,
-        pcm.channels,
-    ))
+    Ok(PcmAudio::new(output_i16, target_sample_rate, pcm.channels))
 }
 
 /// Resamples PCM audio to 48,000 Hz, which is the required native rate for Opus.

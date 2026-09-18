@@ -1,6 +1,4 @@
-use opus_pure::{
-    Application, MAX_PACKET_BYTES, OggOpusWriter, OpusEncoder, OpusHead, OpusTags,
-};
+use opus_pure::{Application, OggOpusWriter, OpusEncoder, OpusHead, OpusTags, MAX_PACKET_BYTES};
 
 use crate::{
     audio::{metadata::AudioMetadata, pcm::PcmAudio, resample},
@@ -105,15 +103,11 @@ pub fn encode_opus(
             let duration = final_granule.saturating_sub(writer.granule() as u64);
             writer
                 .write_packet_with_duration(&packet[..bytes], duration as u32)
-                .map_err(|err| {
-                    TranscodeError::Encode(format!("ogg packet write failed: {err}"))
-                })?;
+                .map_err(|err| TranscodeError::Encode(format!("ogg packet write failed: {err}")))?;
         } else {
             writer
                 .write_packet(&packet[..bytes])
-                .map_err(|err| {
-                    TranscodeError::Encode(format!("ogg packet write failed: {err}"))
-                })?;
+                .map_err(|err| TranscodeError::Encode(format!("ogg packet write failed: {err}")))?;
         }
     }
 
@@ -124,11 +118,10 @@ pub fn encode_opus(
     Ok(output)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opus_pure::{MAX_PACKET_SAMPLES, OggOpusReader, Trim};
+    use opus_pure::{OggOpusReader, Trim, MAX_PACKET_SAMPLES};
     use std::io::Cursor;
 
     #[test]
@@ -183,7 +176,9 @@ mod tests {
 
         for packet in reader.packets() {
             let packet = packet.unwrap();
-            let n = decoder.decode(&packet.data, MAX_PACKET_SAMPLES, &mut block).unwrap();
+            let n = decoder
+                .decode(&packet.data, MAX_PACKET_SAMPLES, &mut block)
+                .unwrap();
             let kept = trim.keep(&packet, &block[..n * 2]);
             decoded_frames += kept.len() / 2;
         }
@@ -192,5 +187,3 @@ mod tests {
         assert!((decoded_frames as i64 - expected_48k_frames as i64).abs() <= 50);
     }
 }
-
-

@@ -34,7 +34,6 @@ pub struct Transcoder {
     bitrate_kbps: u32,
 }
 
-
 impl Transcoder {
     pub fn new(bitrate_kbps: u32) -> Self {
         Self { bitrate_kbps }
@@ -151,7 +150,6 @@ impl Transcoder {
             ))
         })?;
         Ok(())
-
     }
 
     pub fn transcode_mp3_file_to_aac_path(
@@ -671,7 +669,6 @@ fn apply_metadata(
     }
 }
 
-
 #[cfg(feature = "aac-fdk")]
 fn new_aac_encoder(
     sample_rate: u32,
@@ -896,7 +893,6 @@ mod tests {
         assert!(output.windows(4).any(|window| window == b"mdat"));
     }
 
-
     #[cfg(feature = "aac-fdk")]
     #[test]
     fn streams_mp3_file_to_aac_file_when_aac_feature_is_enabled() {
@@ -959,4 +955,3 @@ mod tests {
         std::env::temp_dir().join(format!("{prefix}-{id}"))
     }
 }
-

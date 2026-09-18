@@ -33,7 +33,6 @@ pub use types::{
     SONIC_STATUS_OK, SONIC_STATUS_UNSUPPORTED_FORMAT,
 };
 
-
 /// Transcode MP3 bytes to AAC bytes with a quality preset.
 #[no_mangle]
 pub unsafe extern "C" fn sonic_transcode_mp3_to_aac(
@@ -311,8 +310,9 @@ pub unsafe extern "C" fn sonic_transcode_file(
                 Path::new(&output_path),
                 bitrate_kbps,
             ),
-            crate::audio::output::OutputFormat::Mp3
-            | crate::audio::output::OutputFormat::Opus => unreachable!(),
+            crate::audio::output::OutputFormat::Mp3 | crate::audio::output::OutputFormat::Opus => {
+                unreachable!()
+            }
         };
 
         match result {
@@ -464,7 +464,6 @@ pub extern "C" fn sonic_get_capabilities() -> SonicCapabilities {
         preset_count: 4,
     }
 }
-
 
 /// Release a buffer previously returned through the legacy pointer/len/cap API.
 #[no_mangle]
@@ -702,4 +701,3 @@ mod tests {
         }
     }
 }
-

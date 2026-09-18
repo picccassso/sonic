@@ -47,7 +47,9 @@ pub fn extract_flac_metadata_from_path(path: &Path) -> Option<AudioMetadata> {
     flac_tags_to_metadata(reader.tags())
 }
 
-fn flac_tags_to_metadata<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> Option<AudioMetadata> {
+fn flac_tags_to_metadata<'a>(
+    tags: impl Iterator<Item = (&'a str, &'a str)>,
+) -> Option<AudioMetadata> {
     let mut meta = AudioMetadata::default();
     for (name, val) in tags {
         match name.to_ascii_uppercase().as_str() {
@@ -66,7 +68,6 @@ fn flac_tags_to_metadata<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> 
         Some(meta)
     }
 }
-
 
 fn tag_to_metadata(tag: Tag) -> Option<AudioMetadata> {
     let artwork = tag.pictures().next().cloned();

@@ -41,7 +41,6 @@ pub const SONIC_CAP_OUTPUT_M4A: u32 = 1 << 10;
 pub const SONIC_CAP_OUTPUT_OPUS: u32 = 1 << 11;
 pub const SONIC_CAP_AAC_FDK: u32 = 1 << 16;
 
-
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SonicBuffer {

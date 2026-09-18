@@ -19,7 +19,9 @@ use crate::{
         detect::{self, InputFormat},
         m4a,
         metadata::{self, AudioMetadata},
+        opus,
         output::OutputFormat,
+        pcm::PcmAudio,
         preset::QualityPreset,
     },
     errors::TranscodeError,
@@ -32,12 +34,6 @@ pub struct Transcoder {
     bitrate_kbps: u32,
 }
 
-#[derive(Debug, Clone)]
-struct PcmAudio {
-    samples: Vec<i16>,
-    sample_rate: u32,
-    channels: u16,
-}
 
 impl Transcoder {
     pub fn new(bitrate_kbps: u32) -> Self {
@@ -88,12 +84,24 @@ impl Transcoder {
         }
 
         let input_format = detect::detect_format(input)?;
-        let metadata = if input_format == InputFormat::Mp3
-            && matches!(output_format, OutputFormat::Aac | OutputFormat::Mp3)
-        {
-            metadata::extract_mp3_metadata(input)
-        } else {
-            None
+        let metadata = match input_format {
+            InputFormat::Mp3
+                if matches!(
+                    output_format,
+                    OutputFormat::Aac | OutputFormat::Mp3 | OutputFormat::Opus
+                ) =>
+            {
+                metadata::extract_mp3_metadata(input)
+            }
+            InputFormat::Flac
+                if matches!(
+                    output_format,
+                    OutputFormat::Aac | OutputFormat::Mp3 | OutputFormat::Opus
+                ) =>
+            {
+                metadata::extract_flac_metadata(input)
+            }
+            _ => None,
         };
 
         let pcm = match input_format {
@@ -109,6 +117,7 @@ impl Transcoder {
                 m4a::adts_to_m4a(&adts, bitrate_kbps)?
             }
             OutputFormat::Mp3 => self.encode_mp3(&pcm, bitrate_kbps)?,
+            OutputFormat::Opus => opus::encode_opus(&pcm, bitrate_kbps, metadata.as_ref())?,
         };
 
         if let Some(metadata) = metadata {
@@ -116,6 +125,33 @@ impl Transcoder {
         }
 
         Ok(output)
+    }
+
+    pub fn transcode_file_to_opus_path(
+        &self,
+        input_path: &Path,
+        output_path: &Path,
+        bitrate_kbps: u32,
+    ) -> Result<(), TranscodeError> {
+        if bitrate_kbps == 0 {
+            return Err(TranscodeError::Encode("bitrate must be > 0".to_string()));
+        }
+        let input = std::fs::read(input_path).map_err(|err| {
+            TranscodeError::Decode(format!(
+                "failed to open input file '{}': {err}",
+                input_path.display()
+            ))
+        })?;
+        let output =
+            self.transcode_with_bitrate_and_format(&input, bitrate_kbps, OutputFormat::Opus)?;
+        std::fs::write(output_path, output).map_err(|err| {
+            TranscodeError::Encode(format!(
+                "failed to create output file '{}': {err}",
+                output_path.display()
+            ))
+        })?;
+        Ok(())
+
     }
 
     pub fn transcode_mp3_file_to_aac_path(
@@ -631,9 +667,10 @@ fn apply_metadata(
     match output_format {
         // ID3 before ADTS is widely tolerated and keeps the raw AAC path lightweight.
         OutputFormat::Aac | OutputFormat::Mp3 => metadata::prepend_id3_metadata(data, metadata),
-        OutputFormat::M4a => Ok(data),
+        OutputFormat::M4a | OutputFormat::Opus => Ok(data),
     }
 }
+
 
 #[cfg(feature = "aac-fdk")]
 fn new_aac_encoder(
@@ -772,7 +809,6 @@ fn mp3_bitrate_from_kbps(kbps: u32) -> Mp3Bitrate {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "aac-fdk")]
     use std::{
         fs,
         io::Cursor,
@@ -780,13 +816,71 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    #[cfg(feature = "aac-fdk")]
     use hound::{SampleFormat, WavSpec, WavWriter};
 
-    #[cfg(feature = "aac-fdk")]
     use super::Transcoder;
-    #[cfg(feature = "aac-fdk")]
-    use crate::audio::output::OutputFormat;
+    use crate::audio::{output::OutputFormat, preset::QualityPreset};
+
+    fn tiny_wav() -> Vec<u8> {
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let spec = WavSpec {
+                channels: 2,
+                sample_rate: 44_100,
+                bits_per_sample: 16,
+                sample_format: SampleFormat::Int,
+            };
+            let mut writer = WavWriter::new(&mut cursor, spec).expect("create wav writer");
+            for i in 0..2048 {
+                let sample = ((i as f32 * 0.1).sin() * 10000.0) as i16;
+                writer.write_sample::<i16>(sample).expect("write left");
+                writer.write_sample::<i16>(-sample).expect("write right");
+            }
+            writer.finalize().expect("finalize wav");
+        }
+        cursor.into_inner()
+    }
+
+    #[test]
+    fn transcodes_wav_to_opus_at_all_presets() {
+        let input = tiny_wav();
+        let transcoder = Transcoder::new(192);
+
+        for preset in [
+            QualityPreset::Low,
+            QualityPreset::Medium,
+            QualityPreset::High,
+            QualityPreset::VeryHigh,
+        ] {
+            let output = transcoder
+                .transcode_with_preset_and_format(&input, preset, OutputFormat::Opus)
+                .expect("transcode wav to opus with preset");
+
+            assert!(!output.is_empty());
+            assert_eq!(&output[..4], b"OggS");
+        }
+    }
+
+    #[test]
+    fn transcodes_file_to_opus_file() {
+        let input_wav = tiny_wav();
+        let transcoder = Transcoder::new(192);
+
+        let root = temp_dir("sonic-opus-file-test");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let input_path = root.join("input.wav");
+        let output_path = root.join("output.opus");
+        fs::write(&input_path, input_wav).expect("write wav input");
+
+        transcoder
+            .transcode_file_to_opus_path(&input_path, &output_path, 192)
+            .expect("transcode file to opus");
+
+        let output = fs::read(&output_path).expect("read opus output");
+        assert_eq!(&output[..4], b"OggS");
+
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[cfg(feature = "aac-fdk")]
     #[test]
@@ -802,25 +896,6 @@ mod tests {
         assert!(output.windows(4).any(|window| window == b"mdat"));
     }
 
-    #[cfg(feature = "aac-fdk")]
-    fn tiny_wav() -> Vec<u8> {
-        let mut cursor = Cursor::new(Vec::new());
-        {
-            let spec = WavSpec {
-                channels: 2,
-                sample_rate: 44_100,
-                bits_per_sample: 16,
-                sample_format: SampleFormat::Int,
-            };
-            let mut writer = WavWriter::new(&mut cursor, spec).expect("create wav writer");
-            for _ in 0..2048 {
-                writer.write_sample::<i16>(0).expect("write left");
-                writer.write_sample::<i16>(0).expect("write right");
-            }
-            writer.finalize().expect("finalize wav");
-        }
-        cursor.into_inner()
-    }
 
     #[cfg(feature = "aac-fdk")]
     #[test]
@@ -876,7 +951,6 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(feature = "aac-fdk")]
     fn temp_dir(prefix: &str) -> PathBuf {
         let id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -885,3 +959,4 @@ mod tests {
         std::env::temp_dir().join(format!("{prefix}-{id}"))
     }
 }
+

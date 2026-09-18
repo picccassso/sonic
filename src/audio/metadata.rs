@@ -37,6 +37,37 @@ pub fn extract_mp3_metadata_from_path(path: &Path) -> Option<AudioMetadata> {
     tag_to_metadata(tag)
 }
 
+pub fn extract_flac_metadata(input: &[u8]) -> Option<AudioMetadata> {
+    let reader = claxon::FlacReader::new(Cursor::new(input)).ok()?;
+    flac_tags_to_metadata(reader.tags())
+}
+
+pub fn extract_flac_metadata_from_path(path: &Path) -> Option<AudioMetadata> {
+    let reader = claxon::FlacReader::open(path).ok()?;
+    flac_tags_to_metadata(reader.tags())
+}
+
+fn flac_tags_to_metadata<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> Option<AudioMetadata> {
+    let mut meta = AudioMetadata::default();
+    for (name, val) in tags {
+        match name.to_ascii_uppercase().as_str() {
+            "TITLE" => meta.title = Some(val.to_string()),
+            "ARTIST" => meta.artist = Some(val.to_string()),
+            "ALBUM" => meta.album = Some(val.to_string()),
+            "GENRE" => meta.genre = Some(val.to_string()),
+            "DATE" | "YEAR" => meta.year = val.parse().ok(),
+            "TRACKNUMBER" => meta.track = val.parse().ok(),
+            _ => {}
+        }
+    }
+    if meta.is_empty() {
+        None
+    } else {
+        Some(meta)
+    }
+}
+
+
 fn tag_to_metadata(tag: Tag) -> Option<AudioMetadata> {
     let artwork = tag.pictures().next().cloned();
     Some(AudioMetadata {

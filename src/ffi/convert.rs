@@ -21,9 +21,11 @@ pub fn parse_output_format(output_format: u32) -> Option<OutputFormat> {
         SONIC_OUTPUT_AAC => Some(OutputFormat::Aac),
         SONIC_OUTPUT_MP3 => Some(OutputFormat::Mp3),
         SONIC_OUTPUT_M4A => Some(OutputFormat::M4a),
+        SONIC_OUTPUT_OPUS => Some(OutputFormat::Opus),
         _ => None,
     }
 }
+
 
 pub unsafe fn parse_paths(
     input_path: *const c_char,
@@ -109,9 +111,10 @@ pub fn invalid_preset_message(preset: u32) -> String {
 
 pub fn invalid_output_format_message(output_format: u32) -> String {
     format!(
-        "invalid output format value {output_format}; expected SONIC_OUTPUT_AAC ({SONIC_OUTPUT_AAC}), SONIC_OUTPUT_MP3 ({SONIC_OUTPUT_MP3}), or SONIC_OUTPUT_M4A ({SONIC_OUTPUT_M4A})"
+        "invalid output format value {output_format}; expected SONIC_OUTPUT_AAC ({SONIC_OUTPUT_AAC}), SONIC_OUTPUT_MP3 ({SONIC_OUTPUT_MP3}), SONIC_OUTPUT_M4A ({SONIC_OUTPUT_M4A}), or SONIC_OUTPUT_OPUS ({SONIC_OUTPUT_OPUS})"
     )
 }
+
 
 fn input_format_code(input_format: InputFormat) -> u32 {
     match input_format {

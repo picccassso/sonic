@@ -1,18 +1,20 @@
 # Sonic
 
-Sonic is an embedded Rust audio transcoder for apps that need fast local `MP3`/`WAV`/`FLAC` to `AAC`/`M4A`/`MP3` conversion without shelling out to FFmpeg.
+Sonic is an embedded Rust audio transcoder for apps that need fast local `MP3`/`WAV`/`FLAC` to `Opus`/`AAC`/`M4A`/`MP3` conversion without shelling out to FFmpeg.
 
 It is built as a small library with a stable C ABI, so desktop, mobile, server, and headless apps can link it directly. There is no HTTP service, daemon, media server, or external process involved.
 
 ## What It Does
 
 - Input: `MP3`, `WAV`, `FLAC`
-- Output: `AAC` (ADTS), `M4A`, or `MP3`
+- Output: `Opus` (`.opus` / Ogg container), `AAC` (ADTS), `M4A`, or `MP3`
 - Presets:
   - `LOW` = `64 kbps`
   - `MEDIUM` = `128 kbps`
   - `HIGH` = `192 kbps`
   - `VERY_HIGH` = `320 kbps`
+- Automatic high-fidelity resampling to 48 kHz (via FFT sinc interpolation) for Opus
+- Vorbis comments metadata preservation when writing `.opus`
 - Custom bitrate APIs for callers that need an exact target bitrate
 - Options-based `SonicTranscodeOptions` and `SonicBuffer` APIs for easier host integration
 - Probe API for format, sample rate, channels, duration, bit depth, and metadata/artwork presence
@@ -20,6 +22,7 @@ It is built as a small library with a stable C ABI, so desktop, mobile, server, 
 - Capability reporting for the current build
 - FFI API for desktop/headless builds on macOS, Linux, and Windows
 - Directory batch API with configurable workers for library-scale transcoding
+
 
 ## Non-Goals
 

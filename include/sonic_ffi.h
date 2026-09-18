@@ -27,6 +27,7 @@ extern "C" {
 #define SONIC_OUTPUT_AAC 0
 #define SONIC_OUTPUT_MP3 1
 #define SONIC_OUTPUT_M4A 2
+#define SONIC_OUTPUT_OPUS 3
 
 #define SONIC_INPUT_MP3 0
 #define SONIC_INPUT_WAV 1
@@ -38,7 +39,9 @@ extern "C" {
 #define SONIC_CAP_OUTPUT_AAC (1u << 8)
 #define SONIC_CAP_OUTPUT_MP3 (1u << 9)
 #define SONIC_CAP_OUTPUT_M4A (1u << 10)
+#define SONIC_CAP_OUTPUT_OPUS (1u << 11)
 #define SONIC_CAP_AAC_FDK (1u << 16)
+
 
 typedef struct SonicAudioInfo {
     uint32_t input_format;

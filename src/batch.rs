@@ -161,7 +161,7 @@ fn transcode_job(
                 &job.output_path,
                 bitrate_kbps,
             )),
-            OutputFormat::Mp3 => None,
+            OutputFormat::Mp3 | OutputFormat::Opus => None,
         };
 
         if let Some(result) = streamed {

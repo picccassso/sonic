@@ -65,6 +65,22 @@ if (status != SONIC_STATUS_OK) {
 }
 ```
 
+Transcode WAV to Opus (`.opus` / Ogg container) with automatic 48 kHz resampling:
+
+```c
+SonicTranscodeOptions options = sonic_default_transcode_options();
+options.output_format = SONIC_OUTPUT_OPUS;
+options.preset = SONIC_PRESET_HIGH; // 192 kbps VBR fullband music
+
+char* error = NULL;
+int32_t status = sonic_transcode_file("studio_track.wav", &options, "track.opus", &error);
+if (status != SONIC_STATUS_OK) {
+    fprintf(stderr, "Opus conversion failed: %s\n", error ? error : "unknown error");
+    sonic_free_c_string(error);
+}
+```
+
+
 ## Directory Batch API
 
 Use the batch API when Sonic should manage a worker pool for a whole folder. `workers = 0` lets Sonic choose from available parallelism; set it explicitly when you want predictable resource usage.

@@ -25,13 +25,14 @@ pub use types::{
     SonicAudioInfo, SonicBatchOptions, SonicBatchResult, SonicBuffer, SonicCapabilities,
     SonicTranscodeOptions, SONIC_CAP_AAC_FDK, SONIC_CAP_INPUT_FLAC, SONIC_CAP_INPUT_MP3,
     SONIC_CAP_INPUT_WAV, SONIC_CAP_OUTPUT_AAC, SONIC_CAP_OUTPUT_M4A, SONIC_CAP_OUTPUT_MP3,
-    SONIC_INPUT_FLAC, SONIC_INPUT_MP3, SONIC_INPUT_WAV, SONIC_OUTPUT_AAC, SONIC_OUTPUT_M4A,
-    SONIC_OUTPUT_MP3, SONIC_PRESET_HIGH, SONIC_PRESET_LOW, SONIC_PRESET_MEDIUM,
-    SONIC_PRESET_VERY_HIGH, SONIC_STATUS_DECODE_ERROR, SONIC_STATUS_ENCODE_ERROR,
-    SONIC_STATUS_INTERNAL_ERROR, SONIC_STATUS_INVALID_ARGS, SONIC_STATUS_INVALID_OUTPUT_FORMAT,
-    SONIC_STATUS_INVALID_PRESET, SONIC_STATUS_NOT_IMPLEMENTED, SONIC_STATUS_OK,
-    SONIC_STATUS_UNSUPPORTED_FORMAT,
+    SONIC_CAP_OUTPUT_OPUS, SONIC_INPUT_FLAC, SONIC_INPUT_MP3, SONIC_INPUT_WAV, SONIC_OUTPUT_AAC,
+    SONIC_OUTPUT_M4A, SONIC_OUTPUT_MP3, SONIC_OUTPUT_OPUS, SONIC_PRESET_HIGH, SONIC_PRESET_LOW,
+    SONIC_PRESET_MEDIUM, SONIC_PRESET_VERY_HIGH, SONIC_STATUS_DECODE_ERROR,
+    SONIC_STATUS_ENCODE_ERROR, SONIC_STATUS_INTERNAL_ERROR, SONIC_STATUS_INVALID_ARGS,
+    SONIC_STATUS_INVALID_OUTPUT_FORMAT, SONIC_STATUS_INVALID_PRESET, SONIC_STATUS_NOT_IMPLEMENTED,
+    SONIC_STATUS_OK, SONIC_STATUS_UNSUPPORTED_FORMAT,
 };
+
 
 /// Transcode MP3 bytes to AAC bytes with a quality preset.
 #[no_mangle]
@@ -310,8 +311,10 @@ pub unsafe extern "C" fn sonic_transcode_file(
                 Path::new(&output_path),
                 bitrate_kbps,
             ),
-            crate::audio::output::OutputFormat::Mp3 => unreachable!(),
+            crate::audio::output::OutputFormat::Mp3
+            | crate::audio::output::OutputFormat::Opus => unreachable!(),
         };
+
         match result {
             Ok(()) => return SONIC_STATUS_OK,
             Err(err) => {
@@ -456,11 +459,12 @@ pub extern "C" fn sonic_get_capabilities() -> SonicCapabilities {
     SonicCapabilities {
         abi_version: sonic_ffi_abi_version(),
         input_formats: SONIC_CAP_INPUT_MP3 | SONIC_CAP_INPUT_WAV | SONIC_CAP_INPUT_FLAC,
-        output_formats: SONIC_CAP_OUTPUT_MP3 | aac_output_capabilities(),
+        output_formats: SONIC_CAP_OUTPUT_MP3 | SONIC_CAP_OUTPUT_OPUS | aac_output_capabilities(),
         features: aac_feature_capabilities(),
         preset_count: 4,
     }
 }
+
 
 /// Release a buffer previously returned through the legacy pointer/len/cap API.
 #[no_mangle]
@@ -611,6 +615,7 @@ mod tests {
         assert_ne!(caps.input_formats & SONIC_CAP_INPUT_WAV, 0);
         assert_ne!(caps.input_formats & SONIC_CAP_INPUT_FLAC, 0);
         assert_ne!(caps.output_formats & SONIC_CAP_OUTPUT_MP3, 0);
+        assert_ne!(caps.output_formats & SONIC_CAP_OUTPUT_OPUS, 0);
         assert_eq!(caps.preset_count, 4);
     }
 
@@ -643,5 +648,58 @@ mod tests {
             parse_output_format(SONIC_OUTPUT_M4A),
             Some(crate::audio::output::OutputFormat::M4a)
         );
+        assert_eq!(
+            parse_output_format(SONIC_OUTPUT_OPUS),
+            Some(crate::audio::output::OutputFormat::Opus)
+        );
+    }
+
+    #[test]
+    fn transcodes_wav_buffer_to_opus_via_ffi() {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let spec = hound::WavSpec {
+                channels: 2,
+                sample_rate: 44_100,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::new(&mut cursor, spec).expect("create wav");
+            for _ in 0..2048 {
+                writer.write_sample::<i16>(100).unwrap();
+                writer.write_sample::<i16>(-100).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+        let wav = cursor.into_inner();
+
+        let mut options = sonic_default_transcode_options();
+        options.output_format = SONIC_OUTPUT_OPUS;
+        options.preset = SONIC_PRESET_HIGH;
+
+        let mut out_buffer = SonicBuffer::empty();
+        let mut out_error = std::ptr::null_mut();
+
+        let status = unsafe {
+            sonic_transcode(
+                wav.as_ptr(),
+                wav.len(),
+                &options,
+                &mut out_buffer,
+                &mut out_error,
+            )
+        };
+
+        assert_eq!(status, SONIC_STATUS_OK);
+        assert!(out_buffer.len > 0);
+        assert!(!out_buffer.ptr.is_null());
+
+        let output_bytes = unsafe { std::slice::from_raw_parts(out_buffer.ptr, out_buffer.len) };
+        assert_eq!(&output_bytes[..4], b"OggS");
+
+        unsafe {
+            sonic_free_output_buffer(&mut out_buffer);
+        }
     }
 }
+

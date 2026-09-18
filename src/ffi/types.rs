@@ -26,6 +26,7 @@ pub const SONIC_PRESET_VERY_HIGH: u32 = 3;
 pub const SONIC_OUTPUT_AAC: u32 = 0;
 pub const SONIC_OUTPUT_MP3: u32 = 1;
 pub const SONIC_OUTPUT_M4A: u32 = 2;
+pub const SONIC_OUTPUT_OPUS: u32 = 3;
 
 pub const SONIC_INPUT_MP3: u32 = 0;
 pub const SONIC_INPUT_WAV: u32 = 1;
@@ -37,7 +38,9 @@ pub const SONIC_CAP_INPUT_FLAC: u32 = 1 << 2;
 pub const SONIC_CAP_OUTPUT_AAC: u32 = 1 << 8;
 pub const SONIC_CAP_OUTPUT_MP3: u32 = 1 << 9;
 pub const SONIC_CAP_OUTPUT_M4A: u32 = 1 << 10;
+pub const SONIC_CAP_OUTPUT_OPUS: u32 = 1 << 11;
 pub const SONIC_CAP_AAC_FDK: u32 = 1 << 16;
+
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

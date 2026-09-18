@@ -15,6 +15,8 @@ minimp3 = "0.6"
 hound = "3.5"
 claxon = "0.4"
 mp3lame-encoder = "0.2"
+opus-pure = "0.2.1"
+rubato = "5.0"
 
 # Keep FDK optional at scaffold stage; enable with --features aac-fdk
 fdk-aac = { version = "0.8", optional = true }
@@ -22,3 +24,9 @@ fdk-aac = { version = "0.8", optional = true }
 [features]
 default = []
 aac-fdk = ["dep:fdk-aac"]
+
+[profile.release]
+debug = true
+
+
+

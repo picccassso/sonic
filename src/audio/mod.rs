@@ -1,7 +1,11 @@
 pub mod detect;
 pub mod m4a;
 pub mod metadata;
+pub mod opus;
 pub mod output;
+pub mod pcm;
 pub mod preset;
 pub mod probe;
+pub mod resample;
 pub mod transcoder;
+

@@ -180,9 +180,11 @@ impl<W: Write> OpusStreamEncoder<W> {
                         TranscodeError::Encode(format!("ogg packet write failed: {err}"))
                     })?;
             } else {
-                self.writer.write_packet(&self.packet[..bytes]).map_err(|err| {
-                    TranscodeError::Encode(format!("ogg packet write failed: {err}"))
-                })?;
+                self.writer
+                    .write_packet(&self.packet[..bytes])
+                    .map_err(|err| {
+                        TranscodeError::Encode(format!("ogg packet write failed: {err}"))
+                    })?;
             }
         }
 

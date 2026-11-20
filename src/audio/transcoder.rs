@@ -290,7 +290,9 @@ impl Transcoder {
                     enc_buf.clear();
                     enc_buf.reserve(max_required_buffer_size(0));
                     enc.flush_to_vec::<FlushNoGap>(&mut enc_buf)
-                        .map_err(|err| TranscodeError::Encode(format!("mp3 flush failed: {err}")))?;
+                        .map_err(|err| {
+                            TranscodeError::Encode(format!("mp3 flush failed: {err}"))
+                        })?;
                     writer.write_all(&enc_buf).map_err(|err| {
                         TranscodeError::Encode(format!("mp3 output write failed: {err}"))
                     })?;
@@ -319,7 +321,9 @@ impl Transcoder {
                     opus_enc.as_mut().unwrap().push(samples)
                 })?;
                 let enc = opus_enc.ok_or_else(|| {
-                    TranscodeError::Decode("audio stream did not contain decodable samples".to_string())
+                    TranscodeError::Decode(
+                        "audio stream did not contain decodable samples".to_string(),
+                    )
                 })?;
                 let mut writer = enc.finish()?;
                 writer.flush().map_err(|err| {
@@ -1061,10 +1065,9 @@ fn stream_file_pcm(
             let mut blocks = reader.blocks();
             let mut total_samples = 0usize;
 
-            while let Some(block) = blocks
-                .read_next_or_eof(block_buf)
-                .map_err(|err| TranscodeError::Decode(format!("flac sample decode failed: {err}")))?
-            {
+            while let Some(block) = blocks.read_next_or_eof(block_buf).map_err(|err| {
+                TranscodeError::Decode(format!("flac sample decode failed: {err}"))
+            })? {
                 let frames = block.duration() as usize;
                 interleaved.clear();
                 interleaved.reserve(frames * usize::from(ch));

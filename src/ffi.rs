@@ -1,6 +1,5 @@
 use std::{
     ffi::{c_char, CString},
-    fs,
     path::Path,
 };
 
@@ -292,75 +291,28 @@ pub unsafe extern "C" fn sonic_transcode_file(
         }
     };
 
-    if is_mp3_path(&input_path)
-        && matches!(
-            output_format,
-            crate::audio::output::OutputFormat::Aac | crate::audio::output::OutputFormat::M4a
-        )
-    {
-        let transcoder = Transcoder::new(bitrate_kbps);
-        let result = match output_format {
-            crate::audio::output::OutputFormat::Aac => transcoder.transcode_mp3_file_to_aac_path(
-                Path::new(&input_path),
-                Path::new(&output_path),
-                bitrate_kbps,
-            ),
-            crate::audio::output::OutputFormat::M4a => transcoder.transcode_mp3_file_to_m4a_path(
-                Path::new(&input_path),
-                Path::new(&output_path),
-                bitrate_kbps,
-            ),
-            crate::audio::output::OutputFormat::Mp3 | crate::audio::output::OutputFormat::Opus => {
-                unreachable!()
-            }
-        };
-
-        match result {
-            Ok(()) => return SONIC_STATUS_OK,
-            Err(err) => {
-                write_error(out_error, err.to_string());
-                return map_error_to_status(&err);
-            }
-        }
+    let in_path = Path::new(&input_path);
+    if !in_path.exists() {
+        write_error(
+            out_error,
+            format!("failed to read input file '{input_path}': not found"),
+        );
+        return SONIC_STATUS_INVALID_ARGS;
     }
 
-    let input = match fs::read(&input_path) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            write_error(
-                out_error,
-                format!("failed to read input file '{input_path}': {err}"),
-            );
-            return SONIC_STATUS_INVALID_ARGS;
-        }
-    };
-
-    let output = match transcode_bytes(&input, options) {
-        Ok(bytes) => bytes,
-        Err((status, message)) => {
-            write_error(out_error, message);
-            return status;
-        }
-    };
-
-    match fs::write(&output_path, output) {
+    let transcoder = Transcoder::new(bitrate_kbps);
+    match transcoder.transcode_file_to_path(
+        in_path,
+        Path::new(&output_path),
+        bitrate_kbps,
+        output_format,
+    ) {
         Ok(()) => SONIC_STATUS_OK,
         Err(err) => {
-            write_error(
-                out_error,
-                format!("failed to write output file '{output_path}': {err}"),
-            );
-            SONIC_STATUS_INTERNAL_ERROR
+            write_error(out_error, err.to_string());
+            map_error_to_status(&err)
         }
     }
-}
-
-fn is_mp3_path(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("mp3"))
-        .unwrap_or(false)
 }
 
 /// Transcode all supported audio files in a directory tree.

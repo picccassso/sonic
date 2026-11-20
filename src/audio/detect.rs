@@ -1,3 +1,5 @@
+use std::{fs::File, io::Read, path::Path};
+
 use crate::errors::TranscodeError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5,6 +7,23 @@ pub enum InputFormat {
     Mp3,
     Wav,
     Flac,
+}
+
+pub fn detect_format_from_path(path: &Path) -> Result<InputFormat, TranscodeError> {
+    let mut file = File::open(path).map_err(|err| {
+        TranscodeError::Decode(format!(
+            "failed to open input file '{}': {err}",
+            path.display()
+        ))
+    })?;
+    let mut header = [0u8; 12];
+    let n = file.read(&mut header).map_err(|err| {
+        TranscodeError::Decode(format!(
+            "failed to read input header '{}': {err}",
+            path.display()
+        ))
+    })?;
+    detect_format(&header[..n])
 }
 
 pub fn detect_format(input: &[u8]) -> Result<InputFormat, TranscodeError> {

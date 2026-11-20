@@ -1,9 +1,7 @@
-use std::{io::Cursor, path::Path};
-
-#[cfg(feature = "aac-fdk")]
 use std::{
     fs::File,
-    io::{BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, Cursor, Write},
+    path::Path,
 };
 
 use claxon::FlacReader;
@@ -126,30 +124,221 @@ impl Transcoder {
         Ok(output)
     }
 
+    pub fn transcode_file_to_path(
+        &self,
+        input_path: &Path,
+        output_path: &Path,
+        bitrate_kbps: u32,
+        output_format: OutputFormat,
+    ) -> Result<(), TranscodeError> {
+        if bitrate_kbps == 0 {
+            return Err(TranscodeError::Encode("bitrate must be > 0".to_string()));
+        }
+
+        let input_format = detect::detect_format_from_path(input_path)?;
+        let metadata = match input_format {
+            InputFormat::Mp3
+                if matches!(
+                    output_format,
+                    OutputFormat::Aac | OutputFormat::Mp3 | OutputFormat::Opus
+                ) =>
+            {
+                metadata::extract_mp3_metadata_from_path(input_path)
+            }
+            InputFormat::Flac
+                if matches!(
+                    output_format,
+                    OutputFormat::Aac | OutputFormat::Mp3 | OutputFormat::Opus
+                ) =>
+            {
+                metadata::extract_flac_metadata_from_path(input_path)
+            }
+            _ => None,
+        };
+
+        let output = File::create(output_path).map_err(|err| {
+            TranscodeError::Encode(format!(
+                "failed to create output file '{}': {err}",
+                output_path.display()
+            ))
+        })?;
+        let mut writer = BufWriter::new(output);
+
+        match output_format {
+            OutputFormat::Aac => {
+                #[cfg(feature = "aac-fdk")]
+                {
+                    if let Some(meta) = metadata.as_ref() {
+                        metadata::write_id3_metadata(&mut writer, meta)?;
+                    }
+                    let mut encoder: Option<Encoder> = None;
+                    let mut out_buf = vec![0_u8; 8192];
+                    stream_file_pcm(input_path, input_format, |samples, rate, ch| {
+                        if encoder.is_none() {
+                            encoder = Some(new_aac_encoder(rate, ch, bitrate_kbps)?);
+                        }
+                        encode_aac_samples_to_sink(
+                            encoder.as_ref().unwrap(),
+                            samples,
+                            &mut out_buf,
+                            &mut |adts| {
+                                writer.write_all(adts).map_err(|err| {
+                                    TranscodeError::Encode(format!(
+                                        "aac output write failed: {err}"
+                                    ))
+                                })
+                            },
+                            "aac encode failed",
+                        )
+                    })?;
+                    if let Some(enc) = encoder.as_ref() {
+                        flush_aac_encoder(enc, &mut out_buf, &mut |adts| {
+                            writer.write_all(adts).map_err(|err| {
+                                TranscodeError::Encode(format!("aac output write failed: {err}"))
+                            })
+                        })?;
+                    }
+                    writer.flush().map_err(|err| {
+                        TranscodeError::Encode(format!(
+                            "failed to flush output file '{}': {err}",
+                            output_path.display()
+                        ))
+                    })
+                }
+                #[cfg(not(feature = "aac-fdk"))]
+                {
+                    let _ = (writer, metadata);
+                    Err(TranscodeError::NotImplemented(
+                        "aac encoder unavailable; rebuild with --features aac-fdk".to_string(),
+                    ))
+                }
+            }
+            OutputFormat::M4a => {
+                #[cfg(feature = "aac-fdk")]
+                {
+                    let mut m4a_writer = m4a::M4aWriter::new(writer, bitrate_kbps)?;
+                    let mut encoder: Option<Encoder> = None;
+                    let mut out_buf = vec![0_u8; 8192];
+                    stream_file_pcm(input_path, input_format, |samples, rate, ch| {
+                        if encoder.is_none() {
+                            encoder = Some(new_aac_encoder(rate, ch, bitrate_kbps)?);
+                        }
+                        encode_aac_samples_to_sink(
+                            encoder.as_ref().unwrap(),
+                            samples,
+                            &mut out_buf,
+                            &mut |adts| m4a_writer.write_adts(adts),
+                            "aac encode failed",
+                        )
+                    })?;
+                    if let Some(enc) = encoder.as_ref() {
+                        flush_aac_encoder(enc, &mut out_buf, &mut |adts| {
+                            m4a_writer.write_adts(adts)
+                        })?;
+                    }
+                    let mut writer = m4a_writer.finish()?;
+                    writer.flush().map_err(|err| {
+                        TranscodeError::Encode(format!(
+                            "failed to flush output file '{}': {err}",
+                            output_path.display()
+                        ))
+                    })
+                }
+                #[cfg(not(feature = "aac-fdk"))]
+                {
+                    let _ = (writer, metadata);
+                    Err(TranscodeError::NotImplemented(
+                        "aac encoder unavailable; rebuild with --features aac-fdk".to_string(),
+                    ))
+                }
+            }
+            OutputFormat::Mp3 => {
+                if let Some(meta) = metadata.as_ref() {
+                    metadata::write_id3_metadata(&mut writer, meta)?;
+                }
+                let mut encoder = None;
+                let mut enc_buf = Vec::new();
+                let mut ch_count = 0u16;
+                stream_file_pcm(input_path, input_format, |samples, rate, ch| {
+                    if encoder.is_none() {
+                        ch_count = ch;
+                        encoder = Some(build_mp3_encoder(rate, ch, bitrate_kbps)?);
+                    }
+                    let enc = encoder.as_mut().unwrap();
+                    enc_buf.clear();
+                    if ch_count == 1 {
+                        enc_buf.reserve(max_required_buffer_size(samples.len()));
+                        enc.encode_to_vec(MonoPcm(samples), &mut enc_buf)
+                            .map_err(|err| {
+                                TranscodeError::Encode(format!("mp3 encode failed: {err}"))
+                            })?;
+                    } else {
+                        let usable = samples.len() - (samples.len() % 2);
+                        if usable > 0 {
+                            enc_buf.reserve(max_required_buffer_size(usable / 2));
+                            enc.encode_to_vec(InterleavedPcm(&samples[..usable]), &mut enc_buf)
+                                .map_err(|err| {
+                                    TranscodeError::Encode(format!("mp3 encode failed: {err}"))
+                                })?;
+                        }
+                    }
+                    writer.write_all(&enc_buf).map_err(|err| {
+                        TranscodeError::Encode(format!("mp3 output write failed: {err}"))
+                    })
+                })?;
+                if let Some(mut enc) = encoder {
+                    enc_buf.clear();
+                    enc_buf.reserve(max_required_buffer_size(0));
+                    enc.flush_to_vec::<FlushNoGap>(&mut enc_buf)
+                        .map_err(|err| TranscodeError::Encode(format!("mp3 flush failed: {err}")))?;
+                    writer.write_all(&enc_buf).map_err(|err| {
+                        TranscodeError::Encode(format!("mp3 output write failed: {err}"))
+                    })?;
+                }
+                writer.flush().map_err(|err| {
+                    TranscodeError::Encode(format!(
+                        "failed to flush output file '{}': {err}",
+                        output_path.display()
+                    ))
+                })
+            }
+            OutputFormat::Opus => {
+                let mut opus_enc: Option<opus::OpusStreamEncoder<BufWriter<File>>> = None;
+                let mut writer_slot = Some(writer);
+                stream_file_pcm(input_path, input_format, |samples, rate, ch| {
+                    if opus_enc.is_none() {
+                        let w = writer_slot.take().unwrap();
+                        opus_enc = Some(opus::OpusStreamEncoder::new(
+                            w,
+                            rate,
+                            ch,
+                            bitrate_kbps,
+                            metadata.as_ref(),
+                        )?);
+                    }
+                    opus_enc.as_mut().unwrap().push(samples)
+                })?;
+                let enc = opus_enc.ok_or_else(|| {
+                    TranscodeError::Decode("audio stream did not contain decodable samples".to_string())
+                })?;
+                let mut writer = enc.finish()?;
+                writer.flush().map_err(|err| {
+                    TranscodeError::Encode(format!(
+                        "failed to flush output file '{}': {err}",
+                        output_path.display()
+                    ))
+                })
+            }
+        }
+    }
+
     pub fn transcode_file_to_opus_path(
         &self,
         input_path: &Path,
         output_path: &Path,
         bitrate_kbps: u32,
     ) -> Result<(), TranscodeError> {
-        if bitrate_kbps == 0 {
-            return Err(TranscodeError::Encode("bitrate must be > 0".to_string()));
-        }
-        let input = std::fs::read(input_path).map_err(|err| {
-            TranscodeError::Decode(format!(
-                "failed to open input file '{}': {err}",
-                input_path.display()
-            ))
-        })?;
-        let output =
-            self.transcode_with_bitrate_and_format(&input, bitrate_kbps, OutputFormat::Opus)?;
-        std::fs::write(output_path, output).map_err(|err| {
-            TranscodeError::Encode(format!(
-                "failed to create output file '{}': {err}",
-                output_path.display()
-            ))
-        })?;
-        Ok(())
+        self.transcode_file_to_path(input_path, output_path, bitrate_kbps, OutputFormat::Opus)
     }
 
     pub fn transcode_mp3_file_to_aac_path(
@@ -747,6 +936,227 @@ fn estimated_aac_output_capacity(
     encoded_bytes
         .saturating_add(32 * 1024)
         .min(usize::MAX as u64) as usize
+}
+
+#[cfg(feature = "aac-fdk")]
+fn flush_aac_encoder(
+    encoder: &Encoder,
+    output_buf: &mut [u8],
+    sink: &mut impl FnMut(&[u8]) -> Result<(), TranscodeError>,
+) -> Result<(), TranscodeError> {
+    for _ in 0..8 {
+        let info = encoder
+            .encode(&[], output_buf)
+            .map_err(|err| TranscodeError::Encode(format!("aac flush failed: {err}")))?;
+        if info.output_size > 0 {
+            sink(&output_buf[..info.output_size])?;
+        }
+        if info.output_size == 0 {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn build_mp3_encoder(
+    sample_rate: u32,
+    channels: u16,
+    bitrate_kbps: u32,
+) -> Result<mp3lame_encoder::Encoder, TranscodeError> {
+    let ch = match channels {
+        1 | 2 => channels as u8,
+        other => {
+            return Err(TranscodeError::Encode(format!(
+                "unsupported channel count for MP3 encoding: {other}"
+            )))
+        }
+    };
+    let brate = mp3_bitrate_from_kbps(bitrate_kbps);
+    let mode = if ch == 1 {
+        Mp3Mode::Mono
+    } else {
+        Mp3Mode::JointStereo
+    };
+    let mut builder = Mp3Builder::new().ok_or_else(|| {
+        TranscodeError::Encode("mp3 encoder init failed: unable to allocate encoder".to_string())
+    })?;
+    builder
+        .set_num_channels(ch)
+        .and_then(|_| builder.set_sample_rate(sample_rate))
+        .and_then(|_| builder.set_brate(brate))
+        .and_then(|_| builder.set_mode(mode))
+        .and_then(|_| builder.set_quality(Mp3Quality::Good))
+        .map_err(|err| TranscodeError::Encode(format!("mp3 encoder init failed: {err}")))?;
+    builder
+        .build()
+        .map_err(|err| TranscodeError::Encode(format!("mp3 encoder init failed: {err}")))
+}
+
+fn stream_file_pcm(
+    input_path: &Path,
+    format: InputFormat,
+    mut on_chunk: impl FnMut(&[i16], u32, u16) -> Result<(), TranscodeError>,
+) -> Result<(), TranscodeError> {
+    const WAV_CHUNK_FRAMES: usize = 4096;
+
+    match format {
+        InputFormat::Mp3 => {
+            let input = File::open(input_path).map_err(|err| {
+                TranscodeError::Decode(format!(
+                    "failed to open input file '{}': {err}",
+                    input_path.display()
+                ))
+            })?;
+            let mut decoder = Decoder::new(BufReader::new(input));
+            let mut sample_rate = None;
+            let mut channels = None;
+            let mut decoded_frames = 0usize;
+
+            loop {
+                match decoder.next_frame() {
+                    Ok(frame) => {
+                        let rate = frame.sample_rate as u32;
+                        let ch = frame.channels as u16;
+                        sample_rate.get_or_insert(rate);
+                        channels.get_or_insert(ch);
+                        if sample_rate != Some(rate) || channels != Some(ch) {
+                            return Err(TranscodeError::Decode(
+                                "mp3 stream changed sample rate or channels mid-stream".to_string(),
+                            ));
+                        }
+                        if !frame.data.is_empty() {
+                            on_chunk(&frame.data, rate, ch)?;
+                            decoded_frames += 1;
+                        }
+                    }
+                    Err(Mp3Error::Eof) => break,
+                    Err(err) => {
+                        return Err(TranscodeError::Decode(format!("mp3 decode failed: {err}")))
+                    }
+                }
+            }
+            if decoded_frames == 0 {
+                return Err(TranscodeError::Decode(
+                    "mp3 stream did not contain decodable frames".to_string(),
+                ));
+            }
+            Ok(())
+        }
+        InputFormat::Flac => {
+            let mut reader = FlacReader::open(input_path)
+                .map_err(|err| TranscodeError::Decode(format!("flac decode failed: {err}")))?;
+            let info = reader.streaminfo();
+            if info.channels == 0 || info.channels > 2 {
+                return Err(TranscodeError::Decode(format!(
+                    "unsupported flac channel count: {} (expected mono/stereo)",
+                    info.channels
+                )));
+            }
+            let rate = info.sample_rate;
+            let ch = info.channels as u16;
+            let bits = u32::from(info.bits_per_sample);
+
+            let mut block_buf = Vec::new();
+            let mut interleaved = Vec::new();
+            let mut blocks = reader.blocks();
+            let mut total_samples = 0usize;
+
+            while let Some(block) = blocks
+                .read_next_or_eof(block_buf)
+                .map_err(|err| TranscodeError::Decode(format!("flac sample decode failed: {err}")))?
+            {
+                let frames = block.duration() as usize;
+                interleaved.clear();
+                interleaved.reserve(frames * usize::from(ch));
+                for frame in 0..frames {
+                    for c in 0..u32::from(ch) {
+                        interleaved.push(scale_i32_to_i16(block.sample(c, frame as u32), bits));
+                    }
+                }
+                if !interleaved.is_empty() {
+                    total_samples += interleaved.len();
+                    on_chunk(&interleaved, rate, ch)?;
+                }
+                block_buf = block.into_buffer();
+            }
+            if total_samples == 0 {
+                return Err(TranscodeError::Decode(
+                    "flac stream did not contain decodable samples".to_string(),
+                ));
+            }
+            Ok(())
+        }
+        InputFormat::Wav => {
+            let mut reader = WavReader::open(input_path)
+                .map_err(|err| TranscodeError::Decode(format!("wav decode failed: {err}")))?;
+            let spec = reader.spec();
+            if spec.channels == 0 || spec.channels > 2 {
+                return Err(TranscodeError::Decode(format!(
+                    "unsupported wav channel count: {} (expected mono/stereo)",
+                    spec.channels
+                )));
+            }
+            let rate = spec.sample_rate;
+            let ch = spec.channels;
+            let bits = spec.bits_per_sample as u32;
+            let chunk_cap = WAV_CHUNK_FRAMES * usize::from(ch);
+            let mut chunk = Vec::with_capacity(chunk_cap);
+            let mut total_samples = 0usize;
+
+            match spec.sample_format {
+                WavSampleFormat::Int if bits <= 16 => {
+                    for sample in reader.samples::<i16>() {
+                        let s = sample.map_err(|err| {
+                            TranscodeError::Decode(format!("wav sample decode failed: {err}"))
+                        })?;
+                        chunk.push(scale_i32_to_i16(s as i32, bits));
+                        if chunk.len() >= chunk_cap {
+                            total_samples += chunk.len();
+                            on_chunk(&chunk, rate, ch)?;
+                            chunk.clear();
+                        }
+                    }
+                }
+                WavSampleFormat::Int => {
+                    for sample in reader.samples::<i32>() {
+                        let s = sample.map_err(|err| {
+                            TranscodeError::Decode(format!("wav sample decode failed: {err}"))
+                        })?;
+                        chunk.push(scale_i32_to_i16(s, bits));
+                        if chunk.len() >= chunk_cap {
+                            total_samples += chunk.len();
+                            on_chunk(&chunk, rate, ch)?;
+                            chunk.clear();
+                        }
+                    }
+                }
+                WavSampleFormat::Float => {
+                    for sample in reader.samples::<f32>() {
+                        let s = sample.map_err(|err| {
+                            TranscodeError::Decode(format!("wav sample decode failed: {err}"))
+                        })?;
+                        chunk.push(f32_to_i16(s));
+                        if chunk.len() >= chunk_cap {
+                            total_samples += chunk.len();
+                            on_chunk(&chunk, rate, ch)?;
+                            chunk.clear();
+                        }
+                    }
+                }
+            }
+
+            if !chunk.is_empty() {
+                total_samples += chunk.len();
+                on_chunk(&chunk, rate, ch)?;
+            }
+            if total_samples == 0 {
+                return Err(TranscodeError::Decode(
+                    "wav stream did not contain decodable samples".to_string(),
+                ));
+            }
+            Ok(())
+        }
+    }
 }
 
 fn scale_i32_to_i16(sample: i32, source_bits_per_sample: u32) -> i16 {

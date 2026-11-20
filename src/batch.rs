@@ -149,46 +149,16 @@ fn transcode_job(
     let bitrate_kbps = options
         .bitrate_kbps
         .unwrap_or_else(|| options.preset.bitrate_kbps());
-    if is_mp3_path(&job.input_path) {
-        let streamed = match options.output_format {
-            OutputFormat::Aac => Some(transcoder.transcode_mp3_file_to_aac_path(
-                &job.input_path,
-                &job.output_path,
-                bitrate_kbps,
-            )),
-            OutputFormat::M4a => Some(transcoder.transcode_mp3_file_to_m4a_path(
-                &job.input_path,
-                &job.output_path,
-                bitrate_kbps,
-            )),
-            OutputFormat::Mp3 | OutputFormat::Opus => None,
-        };
-
-        if let Some(result) = streamed {
-            result.map_err(|err| {
-                format!("failed to transcode '{}': {err}", job.input_path.display())
-            })?;
-            let input_bytes = file_len(&job.input_path)?;
-            let output_bytes = file_len(&job.output_path)?;
-            return Ok((input_bytes, output_bytes));
-        }
-    }
-
-    let input = fs::read(&job.input_path)
-        .map_err(|err| format!("failed to read '{}': {err}", job.input_path.display()))?;
-    let input_bytes = input.len() as u64;
-
-    let output = if let Some(bitrate_kbps) = options.bitrate_kbps {
-        transcoder.transcode_with_bitrate_and_format(&input, bitrate_kbps, options.output_format)
-    } else {
-        transcoder.transcode_with_preset_and_format(&input, options.preset, options.output_format)
-    }
-    .map_err(|err| format!("failed to transcode '{}': {err}", job.input_path.display()))?;
-
-    let output_bytes = output.len() as u64;
-    fs::write(&job.output_path, output)
-        .map_err(|err| format!("failed to write '{}': {err}", job.output_path.display()))?;
-
+    transcoder
+        .transcode_file_to_path(
+            &job.input_path,
+            &job.output_path,
+            bitrate_kbps,
+            options.output_format,
+        )
+        .map_err(|err| format!("failed to transcode '{}': {err}", job.input_path.display()))?;
+    let input_bytes = file_len(&job.input_path)?;
+    let output_bytes = file_len(&job.output_path)?;
     Ok((input_bytes, output_bytes))
 }
 
@@ -196,13 +166,6 @@ fn file_len(path: &Path) -> Result<u64, String> {
     fs::metadata(path)
         .map(|metadata| metadata.len())
         .map_err(|err| format!("failed to stat '{}': {err}", path.display()))
-}
-
-fn is_mp3_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("mp3"))
-        .unwrap_or(false)
 }
 
 fn collect_jobs(
